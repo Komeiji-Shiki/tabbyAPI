@@ -209,9 +209,13 @@ class ExllamaV3Container:
         # Prepare vision model if requested in config
         self.vision_model = None
         self.use_vision = kwargs.get("vision", False)
+        # Must be set before the vision component is loaded
+        self.config.infer_params.vision_pinned = unwrap(kwargs.get("vision_offload"), False)
         if self.use_vision:
             if "vision" in self.config.model_classes:
                 self.vision_model = Model.from_config(self.config, component="vision")
+                if self.config.infer_params.vision_pinned:
+                    xlogger.info("Keeping vision model weights in system RAM (vision_offload).")
             else:
                 xlogger.warning(
                     "The provided model does not have vision capabilities that are "

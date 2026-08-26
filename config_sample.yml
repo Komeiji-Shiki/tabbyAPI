@@ -186,6 +186,11 @@ model:
   # Enables vision support if the model supports it. (default: False)
   vision: false
 
+  # Keep the vision model's weights in system RAM instead of VRAM (default: False).
+  # Weights are stored in pinned host memory and streamed to the GPU during inference,
+  # trading vision speed for VRAM. Only applies when vision is enabled.
+  vision_offload: false
+
   # Default chat template variables (default: {}).
   # Merged into the template variables of every chat completion request; values
   # sent by the client (template_vars / chat_template_kwargs, or the top-level

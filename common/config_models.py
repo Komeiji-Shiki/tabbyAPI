@@ -339,6 +339,15 @@ class ModelConfig(BaseConfigModel):
         False,
         description=("Enables vision support if the model supports it. (default: False)"),
     )
+    vision_offload: Optional[bool] = Field(
+        False,
+        description=(
+            "Keep the vision model's weights in system RAM instead of VRAM\n"
+            "(default: False). Weights are stored in pinned host memory and\n"
+            "streamed to the GPU during inference, trading vision speed for\n"
+            "VRAM. Only applies when vision is enabled."
+        ),
+    )
     template_vars_default: dict = Field(
         {},
         description=(
