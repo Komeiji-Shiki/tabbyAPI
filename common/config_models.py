@@ -251,7 +251,29 @@ class ModelConfig(BaseConfigModel):
         0,
         description=(
             "Number of mixture-of-expert layers to offload to CPU inference (default: 0)\n"
-            "Only affects MoE models. Set a large value such as 999 to offload all layers"
+            "Only affects MoE models. Set a large value such as 999 to offload all layers\n"
+            "Mutually exclusive with cpu_moe_split_experts."
+        ),
+    )
+    cpu_moe_split_experts: Optional[int] = Field(
+        0,
+        description=(
+            "Number of routed experts per MoE layer to offload to CPU inference\n"
+            "(default: 0). Unlike cpu_moe_offload_layers, this splits every MoE\n"
+            "layer instead of offloading whole layers: the coldest experts are\n"
+            "kept in system RAM and computed on the CPU, overlapping each\n"
+            "layer's own GPU compute, with dynamic placement keeping hot\n"
+            "experts in VRAM. Mutually exclusive with cpu_moe_offload_layers;\n"
+            "not supported with tensor parallelism."
+        ),
+    )
+    cpu_moe_threads: Optional[int] = Field(
+        None,
+        description=(
+            "Worker thread count for CPU MoE inference (default: None).\n"
+            "Applies to both cpu_moe_offload_layers and cpu_moe_split_experts.\n"
+            "When unset, defers to the EXL3_MOE_CPU_THREADS environment\n"
+            "variable, then half the CPU core count."
         ),
     )
 

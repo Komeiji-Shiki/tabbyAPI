@@ -129,7 +129,20 @@ model:
 
   # Number of mixture-of-expert layers to offload to CPU inference (default: 0)
   # Only affects MoE models. Set a large value such as 999 to offload all layers
+  # Mutually exclusive with cpu_moe_split_experts.
   cpu_moe_offload_layers:
+
+  # Number of routed experts per MoE layer to offload to CPU inference (default: 0).
+  # Unlike cpu_moe_offload_layers, this splits every MoE layer instead of offloading whole
+  # layers: the coldest experts are kept in system RAM and computed on the CPU, overlapping
+  # each layer's own GPU compute, with dynamic placement keeping hot experts in VRAM.
+  # Mutually exclusive with cpu_moe_offload_layers; not supported with tensor parallelism.
+  cpu_moe_split_experts:
+
+  # Worker thread count for CPU MoE inference (default: None).
+  # Applies to both cpu_moe_offload_layers and cpu_moe_split_experts. When unset,
+  # defers to the EXL3_MOE_CPU_THREADS environment variable, then half the CPU core count.
+  cpu_moe_threads:
 
   # NOTE: If a model has YaRN rope scaling, it will automatically be enabled by ExLlama.
   # rope_scale and rope_alpha settings won't apply in this case.
