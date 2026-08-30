@@ -57,7 +57,7 @@ def _config_snapshot() -> dict:
     from common.config_models import TabbyConfigModel
 
     sections = {}
-    for section_name, section_field in TabbyConfigModel.model_fields.items():
+    for section_name in TabbyConfigModel.model_fields:
         section_model = getattr(config, section_name, None)
         if not isinstance(section_model, BaseConfigModel):
             continue

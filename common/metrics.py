@@ -54,6 +54,15 @@ def _int(value: Any, default: int = 0) -> int:
     return default
 
 
+_ABORT_REASONS = {"cancelled", "canceled", "aborted", "incomplete", "error"}
+
+
+def _is_aborted(entry: dict) -> bool:
+    reason = str(entry.get("finish_reason") or entry.get("eos_reason") or "").lower()
+    # Legacy interrupted rows used a missing cache count as their only marker.
+    return reason in _ABORT_REASONS or entry.get("cached_tokens") is None
+
+
 class MetricsCollector:
     """Collects generation stats for the dashboard."""
 
@@ -82,10 +91,16 @@ class MetricsCollector:
             "prompt_tokens": 0,
             "cached_tokens": 0,
             "new_prompt_tokens": 0,
+            "cache_scored_prompt_tokens": 0,
+            "prefill_tokens": 0,
             "gen_tokens": 0,
+            "scored_gen_tokens": 0,
             "prompt_time": 0.0,
             "gen_time": 0.0,
             "queue_time": 0.0,
+            "queue_samples": 0,
+            "requeue_time": 0.0,
+            "requeue_count": 0,
             "total_time": 0.0,
             "draft_accept": 0,
             "draft_reject": 0,
@@ -135,6 +150,16 @@ class MetricsCollector:
         while samples and now - samples[0][0] > TPS_WINDOW:
             samples.popleft()
 
+    def reconcile_stream_tokens(self, request_id: str, total: int):
+        """Add sampled tokens that were not emitted as ordinary text chunks."""
+
+        state = self._inflight.get(request_id)
+        if state is None:
+            return
+        missing = max(_int(total) - state["gen_tokens"], 0)
+        if missing:
+            self.note_stream_tokens(request_id, missing)
+
     def note_prefill_progress(self, request_id: str, curr: int, maximum: int):
         """Track chunk-by-chunk prefill progress reported by the backend."""
 
@@ -149,7 +174,7 @@ class MetricsCollector:
         if delta > 0:
             self._current_bucket()[1] += delta
 
-    def note_prefill_finished(self, request_id: str):
+    def note_prefill_finished(self, request_id: str, maximum: Optional[int] = None):
         """Mark prefill complete. The request stays in flight while it decodes."""
 
         state = self._inflight.get(request_id)
@@ -157,7 +182,12 @@ class MetricsCollector:
             return
 
         state["prefill_done"] = True
+        if maximum is not None:
+            state["prefill_max"] = max(_int(maximum), 0)
         if state["prefill_max"]:
+            remaining = max(state["prefill_max"] - state["prefill_curr"], 0)
+            if remaining:
+                self._current_bucket()[1] += remaining
             state["prefill_curr"] = state["prefill_max"]
 
     def note_request_finished(self, request_id: str):
@@ -191,6 +221,7 @@ class MetricsCollector:
             "prompt_tokens": state["prompt_tokens"],
             "cached_tokens": None,
             "new_tokens": None,
+            "prefill_tokens": None,
             "gen_tokens": state["gen_tokens"],
             "prompt_tps": None,
             "gen_tps": None,
@@ -274,10 +305,9 @@ class MetricsCollector:
         Fold one record into the cumulative totals. Shared by live recording and
         by startup replay so the two can never drift apart.
 
-        Aborted records report None for the values the backend only reveals on
-        its finish chunk (cache hits, prefill and queue time). Only the fields
-        that are actually known are folded in, and they are also tracked under
-        cancelled_* so rate metrics can leave them out.
+        Legacy aborted records may contain None for timing/cache fields. Newer
+        backends can report complete metrics for interrupted requests, so each
+        token/time pair is scored whenever both sides are actually measurable.
         """
 
         totals = self.totals
@@ -290,19 +320,40 @@ class MetricsCollector:
         totals["gen_tokens"] += gen_tokens
         totals["total_time"] += total_time
 
-        if entry.get("cached_tokens") is None:
+        if _is_aborted(entry):
             totals["cancelled_requests"] += 1
             totals["cancelled_prompt_tokens"] += prompt_tokens
             totals["cancelled_gen_tokens"] += gen_tokens
             totals["cancelled_time"] += total_time
-            return
 
-        cached_tokens = _num(entry.get("cached_tokens"))
-        totals["cached_tokens"] += cached_tokens
-        totals["new_prompt_tokens"] += max(prompt_tokens - cached_tokens, 0.0)
-        totals["prompt_time"] += _num(entry.get("prompt_time"))
-        totals["gen_time"] += _num(entry.get("gen_time"))
-        totals["queue_time"] += _num(entry.get("queue_time"))
+        cached_value = entry.get("cached_tokens")
+        new_prompt_tokens = None
+        if cached_value is not None:
+            cached_tokens = _num(cached_value)
+            new_prompt_tokens = max(prompt_tokens - cached_tokens, 0.0)
+            totals["cache_scored_prompt_tokens"] += prompt_tokens
+            totals["cached_tokens"] += cached_tokens
+            totals["new_prompt_tokens"] += new_prompt_tokens
+
+        prompt_time_value = entry.get("prompt_time")
+        prefill_tokens_value = entry.get("prefill_tokens")
+        prompt_time = _num(prompt_time_value)
+        if prompt_time > 0:
+            prefill_tokens = _num(prefill_tokens_value, prompt_tokens)
+            totals["prefill_tokens"] += prefill_tokens
+            totals["prompt_time"] += prompt_time
+
+        gen_time = _num(entry.get("gen_time"))
+        if gen_time > 0:
+            totals["scored_gen_tokens"] += gen_tokens
+            totals["gen_time"] += gen_time
+
+        if entry.get("queue_time") is not None:
+            totals["queue_time"] += _num(entry.get("queue_time"))
+            totals["queue_samples"] += 1
+
+        totals["requeue_time"] += _num(entry.get("requeue_time"))
+        totals["requeue_count"] += _int(entry.get("requeue_count"))
         totals["draft_accept"] += _int(entry.get("draft_accept"))
         totals["draft_reject"] += _int(entry.get("draft_reject"))
 
@@ -310,27 +361,42 @@ class MetricsCollector:
         """Store the final per-request metrics and update cumulative totals."""
 
         prompt_tokens = _int(metrics.get("prompt_tokens"))
-        cached_tokens = _num(metrics.get("cached_tokens"))
-        new_tokens = max(prompt_tokens - cached_tokens, 0.0)
+        cached_value = metrics.get("cached_tokens")
+        cached_tokens = None if cached_value is None else _num(cached_value)
+        new_tokens = (
+            None if cached_tokens is None else max(prompt_tokens - cached_tokens, 0.0)
+        )
         gen_tokens = _int(metrics.get("gen_tokens"))
-        prompt_time = _num(metrics.get("prompt_time"))
-        gen_time = _num(metrics.get("gen_time"))
-        queue_time = _num(metrics.get("queue_time"))
+        prompt_time = (
+            None if metrics.get("prompt_time") is None else _num(metrics.get("prompt_time"))
+        )
+        gen_time = None if metrics.get("gen_time") is None else _num(metrics.get("gen_time"))
+        queue_time = (
+            None if metrics.get("queue_time") is None else _num(metrics.get("queue_time"))
+        )
         total_time = _num(metrics.get("total_time"))
+        prefill_tokens = metrics.get("prefill_tokens")
+        if prefill_tokens is None:
+            prefill_tokens = prompt_tokens
 
         entry = {
             "request_id": metrics.get("request_id"),
             "ts": time.time(),
             "prompt_tokens": prompt_tokens,
-            "cached_tokens": round(cached_tokens, 1),
-            "new_tokens": round(new_tokens, 1),
+            "cached_tokens": None if cached_tokens is None else round(cached_tokens, 1),
+            "new_tokens": None if new_tokens is None else round(new_tokens, 1),
+            "prefill_tokens": (
+                None if prefill_tokens is None else round(_num(prefill_tokens), 1)
+            ),
             "gen_tokens": gen_tokens,
             "prompt_tps": metrics.get("prompt_tokens_per_sec"),
             "gen_tps": metrics.get("gen_tokens_per_sec"),
-            "prompt_time": round(prompt_time, 2),
-            "gen_time": round(gen_time, 2),
-            "queue_time": round(queue_time, 2),
+            "prompt_time": None if prompt_time is None else round(prompt_time, 2),
+            "gen_time": None if gen_time is None else round(gen_time, 2),
+            "queue_time": None if queue_time is None else round(queue_time, 2),
             "total_time": round(total_time, 2),
+            "requeue_time": round(_num(metrics.get("requeue_time")), 2),
+            "requeue_count": _int(metrics.get("requeue_count")),
             "finish_reason": metrics.get("finish_reason"),
             "eos_reason": metrics.get("eos_reason"),
         }
@@ -432,16 +498,14 @@ class MetricsCollector:
         recent_prompt = 0.0
         recent_cached = 0.0
         for entry in self.recent:
-            # Aborted entries carry no cache data; counting them would drag the
-            # ratio down, so they are skipped on both sides of the division
+            # Legacy aborted entries carry no cache data; skip unknown values on
+            # both sides. Correctly measured interrupted requests remain scored.
             if entry.get("cached_tokens") is None:
                 continue
             recent_prompt += entry["prompt_tokens"]
             recent_cached += entry["cached_tokens"]
 
-        # Cancelled requests contribute real prompt tokens but no cache figure,
-        # so keep them out of the cumulative denominator as well
-        scored_prompt = prompt - totals["cancelled_prompt_tokens"]
+        scored_prompt = totals["cache_scored_prompt_tokens"]
 
         return {
             "total_tokens": prompt,
@@ -460,18 +524,20 @@ class MetricsCollector:
         now = time.time()
         live_gen, live_prefill = self._rate_over(LIVE_WINDOW)
         totals = dict(self.totals)
-        for key in ("prompt_time", "gen_time", "queue_time", "total_time"):
+        for key in (
+            "prompt_time",
+            "gen_time",
+            "queue_time",
+            "total_time",
+            "requeue_time",
+        ):
             totals[key] = round(totals[key], 2)
 
-        prompt = totals["prompt_tokens"]
         gen_time = totals["gen_time"]
         prefill_time = totals["prompt_time"]
-        new_prompt = totals["new_prompt_tokens"]
-
-        # Only completed generations report their timing, so rates must divide
-        # the subset of tokens that actually has a matching time measurement
-        scored_requests = totals["requests"] - totals["cancelled_requests"]
-        scored_gen_tokens = totals["gen_tokens"] - totals["cancelled_gen_tokens"]
+        prefill_tokens = totals["prefill_tokens"]
+        queue_samples = totals["queue_samples"]
+        scored_gen_tokens = totals["scored_gen_tokens"]
 
         draft_total = totals["draft_accept"] + totals["draft_reject"]
 
@@ -488,10 +554,10 @@ class MetricsCollector:
                     round(scored_gen_tokens / gen_time, 2) if gen_time > 0 else None
                 ),
                 "prefill_tokens_per_sec": (
-                    round(new_prompt / prefill_time, 2) if prefill_time > 0 else None
+                    round(prefill_tokens / prefill_time, 2) if prefill_time > 0 else None
                 ),
-                "queue_time": round(totals["queue_time"] / scored_requests, 3)
-                if scored_requests > 0
+                "queue_time": round(totals["queue_time"] / queue_samples, 3)
+                if queue_samples > 0
                 else None,
                 "draft_accept_ratio": round(totals["draft_accept"] / draft_total, 4)
                 if draft_total > 0

@@ -78,12 +78,16 @@ def log_metrics(
 
     cached_tokens = metrics.get("cached_tokens")
     prompt_tokens = metrics.get("prompt_tokens")
-
-    itemization.append(
-        f"Process: {cached_tokens} cached tokens and "
-        f"{prompt_tokens - cached_tokens} new tokens at "
-        f"{metrics.get('prompt_tokens_per_sec')} T/s"
-    )
+    new_prompt_tokens = None
+    if cached_tokens is not None and prompt_tokens is not None:
+        new_prompt_tokens = prompt_tokens - cached_tokens
+        itemization.append(
+            f"Prefill: {prompt_tokens} input tokens "
+            f"({cached_tokens} cached, {new_prompt_tokens} uncached) at "
+            f"{metrics.get('prompt_tokens_per_sec')} effective T/s"
+        )
+    else:
+        itemization.append("Prefill: cache/prefill metrics unavailable")
 
     itemization.append(f"Generate: {metrics.get('gen_tokens_per_sec')} T/s")
 
@@ -108,7 +112,7 @@ def log_metrics(
     xlogger.info(
         initial_response,
         {
-            "new_tokens": prompt_tokens - cached_tokens,
+            "new_tokens": new_prompt_tokens,
             "cached_tokens": cached_tokens,
             "prompt_tokens": prompt_tokens,
             "prompt_tokens_per_second": metrics.get("prompt_tokens_per_sec"),

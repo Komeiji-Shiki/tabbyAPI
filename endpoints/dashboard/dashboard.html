@@ -733,15 +733,18 @@ function renderRecent(recent) {
     body.innerHTML = '<tr><td colspan="8" class="muted">暂无已完成的生成记录</td></tr>';
     return;
   }
+  const aborted = (r) => ["cancelled", "canceled", "aborted", "incomplete", "error"]
+    .includes(String(r.finish_reason || r.eos_reason || "").toLowerCase())
+    || r.cached_tokens === null || r.cached_tokens === undefined;
   body.innerHTML = recent.map((r) => `
-    <tr class="${r.cached_tokens === null || r.cached_tokens === undefined ? "aborted" : ""}">
+    <tr class="${aborted(r) ? "aborted" : ""}">
       <td>${timeOf(r.ts)}</td>
       <td class="num">${fmt(r.prompt_tokens)}</td>
       <td class="num" title="前缀缓存命中">${fmt(r.cached_tokens)}</td>
       <td class="num">${fmt(r.gen_tokens)}</td>
       <td class="num accent">${typeof r.gen_tps === "number" ? fmt(r.gen_tps, 1) : "—"}</td>
       <td class="num purple">${typeof r.prompt_tps === "number" ? fmt(r.prompt_tps, 0) : "—"}</td>
-      <td class="num">${fmt(r.queue_time, 2)}s</td>
+      <td class="num">${typeof r.queue_time === "number" ? fmt(r.queue_time, 2) + "s" : "—"}</td>
       <td class="small muted">${r.eos_reason || r.finish_reason || "—"}</td>
     </tr>`).join("");
 }

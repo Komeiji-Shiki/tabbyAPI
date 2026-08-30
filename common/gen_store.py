@@ -20,7 +20,7 @@ from typing import List, Optional
 import aiofiles
 
 from common.logger import xlogger
-from common.metrics import RECENT_MAX, collector
+from common.metrics import collector
 
 # Bumped if the record layout changes incompatibly
 SCHEMA_VERSION = 1

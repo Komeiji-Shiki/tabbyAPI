@@ -47,10 +47,19 @@ def aggregate_usage_stats(usage_stats_list: list[UsageStats]) -> UsageStats:
     prompt_time = usl[0].prompt_time
     prompt_tokens_per_sec = usl[0].prompt_tokens_per_sec
     completion_tokens = sum(us.completion_tokens for us in usl)
-    completion_time = max(us.completion_time for us in usl)
+    completion_times = [us.completion_time for us in usl if us.completion_time is not None]
+    completion_time = max(completion_times) if completion_times else 0.0
     completion_tokens_per_sec = completion_tokens / (completion_time + 1e-20)
     total_tokens = prompt_tokens + completion_tokens
-    total_time = prompt_time + completion_time
+    # Choices run concurrently and a logical request may include internal
+    # output-chunk requeues, so prompt + decode omits real elapsed overhead.
+    # The slowest choice's backend total is the request wall-time equivalent.
+    total_times = [us.total_time for us in usl if us.total_time is not None]
+    total_time = (
+        max(total_times)
+        if total_times
+        else (prompt_time or 0.0) + completion_time
+    )
 
     prompt_tokens_details = usl[0].prompt_tokens_details or PromptTokensDetails()
 

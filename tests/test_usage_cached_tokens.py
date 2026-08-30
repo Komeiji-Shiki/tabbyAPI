@@ -62,7 +62,8 @@ class UsageCachedTokensTests(unittest.TestCase):
             completion_time=0.75,
             completion_tokens_per_sec=26.666666666666668,
             total_tokens=1020,
-            total_time=1.75,
+            # Includes scheduling/requeue overhead beyond prompt + decode.
+            total_time=4.0,
         )
 
         usage = aggregate_usage_stats([first, second])
@@ -71,6 +72,7 @@ class UsageCachedTokensTests(unittest.TestCase):
         self.assertEqual(usage.prompt_tokens_details.cached_tokens, 768)
         self.assertEqual(usage.completion_tokens, 30)
         self.assertEqual(usage.total_tokens, 1030)
+        self.assertEqual(usage.total_time, 4.0)
 
 
 if __name__ == "__main__":

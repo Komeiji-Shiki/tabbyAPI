@@ -2,6 +2,7 @@ import asyncio
 import gc
 import pathlib
 import re
+import time
 from asyncio import CancelledError
 
 import torch
@@ -22,6 +23,7 @@ from exllamav3 import (
     Tokenizer,
 )
 from exllamav3.cache import CacheLayer_quant
+from exllamav3.constants import PAGE_SIZE
 from backends.exllamav3.grammar import ExLlamaV3Grammar
 
 from backends.exllamav3.sampler import ExllamaV3SamplerBuilder
@@ -76,6 +78,296 @@ def _merge_stream_results(results: List[dict]) -> dict:
             merged[key] = tensors[0]
 
     return merged
+
+
+def _token_ids_to_list(token_ids: Any) -> List[int]:
+    """Flatten the token container emitted by exllamav3 into plain IDs."""
+
+    if token_ids is None:
+        return []
+    if isinstance(token_ids, torch.Tensor):
+        return token_ids.flatten().tolist()
+    if isinstance(token_ids, tuple):
+        token_ids = token_ids[0] if token_ids else []
+        if isinstance(token_ids, torch.Tensor):
+            return token_ids.flatten().tolist()
+    return list(token_ids)
+
+
+class _LogicalGenerationMetrics:
+    """
+    Normalize exllamav3's physical-job metrics into one logical API request.
+
+    With output chunking enabled, exllamav3 periodically requeues a long
+    generation with ``original prompt + output so far`` as a new physical
+    prompt. Its final event therefore describes only the last physical job:
+    generated output can appear as prompt/cache input and the output counter can
+    contain only a tail of the logical completion. TabbyAPI's public usage must
+    instead keep the first prompt/cache/prefill and count the final logical
+    sequence across all requeues.
+    """
+
+    def __init__(self, prompt_tokens: int, clock=None):
+        self.prompt_tokens = max(int(prompt_tokens), 0)
+        self.generated_tokens = 0
+        self.requeue_count = 0
+
+        self.cached_tokens: Optional[int] = None
+        self.prompt_time: Optional[float] = None
+        self.queue_time: Optional[float] = None
+        self.prefill_tokens = 0
+        self._prefill_processed = 0
+        self._initial_captured = False
+
+        self._draft_accept = 0
+        self._draft_reject = 0
+        self._clock = clock or time.time
+        self.started_at = self._clock()
+
+    @staticmethod
+    def _seconds(value: Any) -> float:
+        if isinstance(value, bool) or value is None:
+            return 0.0
+        try:
+            return max(float(value), 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @staticmethod
+    def _timestamp(value: Any) -> Optional[float]:
+        if isinstance(value, bool) or value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _cached_from_job(self, backend_job: Any) -> int:
+        if backend_job is None:
+            return 0
+
+        sequences = getattr(backend_job, "sequences", None)
+        sequence_count = max(len(sequences) if sequences is not None else 1, 1)
+        cached_pages = max(int(getattr(backend_job, "cached_pages", 0) or 0), 0)
+        cached_tail = max(int(getattr(backend_job, "cached_tokens", 0) or 0), 0)
+        cached = (cached_pages * PAGE_SIZE + cached_tail) // sequence_count
+        return min(cached, self.prompt_tokens)
+
+    def _sync_generated_from_job(self, backend_job: Any):
+        """Use the logical sequence length as the authoritative output count."""
+
+        sequences = getattr(backend_job, "sequences", None)
+        if not sequences:
+            return
+        sequence_ids = getattr(sequences[0], "sequence_ids", None)
+        if sequence_ids is None:
+            return
+        try:
+            sequence_len = len(sequence_ids)
+        except TypeError:
+            return
+        if sequence_len >= self.prompt_tokens:
+            # Unlike streamed token_ids, this includes a sampled stop token and
+            # still works after every requeue because the new physical prompt is
+            # the complete logical sequence accumulated so far.
+            self.generated_tokens = sequence_len - self.prompt_tokens
+
+    def _live_job_times(self, backend_job: Any, now: Optional[float] = None) -> tuple:
+        """Return cumulative queue/prefill/decode time, including the active segment."""
+
+        now = self._clock() if now is None else now
+        queue_time = self._seconds(getattr(backend_job, "time_enqueued", 0.0))
+        prompt_time = self._seconds(getattr(backend_job, "time_prefill", 0.0))
+        gen_time = self._seconds(getattr(backend_job, "time_generate", 0.0))
+
+        enqueued_at = self._timestamp(getattr(backend_job, "time_enqueue", None))
+        prefill_at = self._timestamp(getattr(backend_job, "time_first_prefill", None))
+        first_token_at = self._timestamp(getattr(backend_job, "time_first_token", None))
+
+        if enqueued_at is None:
+            return queue_time, prompt_time, gen_time
+        if prefill_at is None:
+            queue_time += max(now - enqueued_at, 0.0)
+            return queue_time, prompt_time, gen_time
+
+        queue_time += max(prefill_at - enqueued_at, 0.0)
+        if first_token_at is None:
+            prompt_time += max(now - prefill_at, 0.0)
+            return queue_time, prompt_time, gen_time
+
+        prompt_time += max(first_token_at - prefill_at, 0.0)
+        gen_time += max(now - first_token_at, 0.0)
+        return queue_time, prompt_time, gen_time
+
+    def _capture_initial(
+        self,
+        backend_job: Any,
+        *,
+        finalized: bool,
+        prefill_complete: bool,
+    ):
+        if self._initial_captured:
+            return
+
+        prefill_started = (
+            finalized
+            or prefill_complete
+            or self._prefill_processed > 0
+            or getattr(backend_job, "time_first_prefill", None) is not None
+        )
+        self.cached_tokens = (
+            self._cached_from_job(backend_job) if prefill_started else None
+        )
+        if finalized:
+            self.queue_time = self._seconds(getattr(backend_job, "time_enqueued", 0.0))
+            self.prompt_time = self._seconds(getattr(backend_job, "time_prefill", 0.0))
+        else:
+            queue_time, prompt_time, _ = self._live_job_times(backend_job)
+            self.queue_time = queue_time
+            self.prompt_time = prompt_time
+
+        if self.cached_tokens is None:
+            self.prefill_tokens = self._prefill_processed
+        elif prefill_complete:
+            self.prefill_tokens = self.prompt_tokens
+        else:
+            self.prefill_tokens = min(self._prefill_processed, self.prompt_tokens)
+        self._initial_captured = True
+
+    def attach(self, backend_job: Any):
+        """Snapshot the first physical job immediately before exllamav3 reinitializes it."""
+
+        original_prepare = getattr(backend_job, "prepare_for_requeue", None)
+        if not callable(original_prepare):
+            return
+
+        def prepare_for_requeue():
+            self._capture_initial(backend_job, finalized=True, prefill_complete=True)
+            draft_accept = max(
+                int(getattr(backend_job, "accepted_draft_tokens", 0) or 0), 0
+            )
+            draft_reject = max(
+                int(getattr(backend_job, "rejected_draft_tokens", 0) or 0), 0
+            )
+            requeued_job = original_prepare()
+            self._draft_accept += draft_accept
+            self._draft_reject += draft_reject
+            self.requeue_count += 1
+            return requeued_job
+
+        # Job.prepare_for_requeue calls Job.__init__ on the same object. Unknown
+        # instance attributes survive that call, so this wrapper remains active
+        # and can account for every later physical segment as well.
+        backend_job.prepare_for_requeue = prepare_for_requeue
+
+    def note_prefill(self, result: dict) -> Optional[tuple]:
+        """Track only the first physical prefill and return its live progress."""
+
+        if self._initial_captured:
+            return None
+
+        curr = max(int(result.get("curr_progress", 0) or 0), 0)
+        curr = min(curr, self.prompt_tokens)
+        self._prefill_processed = max(self._prefill_processed, curr)
+        return self._prefill_processed, self.prompt_tokens
+
+    def note_generated_tokens(self, count: int, result: dict):
+        if count <= 0:
+            return
+        if not self._initial_captured:
+            self._capture_initial(
+                result.get("job"),
+                finalized=False,
+                prefill_complete=True,
+            )
+        self.generated_tokens += count
+
+    def _draft_totals(self, backend_job: Any, result: Optional[dict] = None) -> tuple:
+        if result is not None and result.get("accepted_draft_tokens") is not None:
+            accept = int(result.get("accepted_draft_tokens") or 0)
+            reject = int(result.get("rejected_draft_tokens") or 0)
+        else:
+            accept = int(getattr(backend_job, "accepted_draft_tokens", 0) or 0)
+            reject = int(getattr(backend_job, "rejected_draft_tokens", 0) or 0)
+        return self._draft_accept + max(accept, 0), self._draft_reject + max(reject, 0)
+
+    @staticmethod
+    def _rate(tokens: int, seconds: float):
+        if tokens <= 0 or seconds <= 0:
+            return "Indeterminate"
+        return round(tokens / seconds, 2)
+
+    def _base_stats(self, gen_time: float, total_time: float) -> dict:
+        cached_tokens = self.cached_tokens
+        prompt_time = self.prompt_time if self.prompt_time is not None else 0.0
+        queue_time = self.queue_time if self.queue_time is not None else 0.0
+        requeue_time = max(total_time - queue_time - prompt_time - gen_time, 0.0)
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "cached_tokens": cached_tokens,
+            "prefill_tokens": self.prefill_tokens,
+            "prompt_time": round(prompt_time, 2),
+            "prompt_tokens_per_sec": self._rate(self.prefill_tokens, prompt_time),
+            "gen_tokens": self.generated_tokens,
+            "gen_time": round(gen_time, 2),
+            "gen_tokens_per_sec": self._rate(self.generated_tokens, gen_time),
+            "queue_time": round(queue_time, 2),
+            "total_time": round(total_time, 2),
+            "requeue_time": round(requeue_time, 2),
+            "requeue_count": self.requeue_count,
+        }
+
+    def finish(self, result: dict) -> dict:
+        backend_job = result.get("job")
+        if not self._initial_captured:
+            self._capture_initial(backend_job, finalized=True, prefill_complete=True)
+        self._sync_generated_from_job(backend_job)
+
+        gen_time = self._seconds(result.get("time_generate"))
+        total_time = sum(
+            self._seconds(result.get(key))
+            for key in ("time_enqueued", "time_prefill", "time_generate")
+        )
+        if total_time <= 0:
+            total_time = max(self._clock() - self.started_at, 0.0)
+
+        stats = self._base_stats(gen_time, total_time)
+        draft_accept, draft_reject = self._draft_totals(backend_job, result)
+        if result.get("accepted_draft_tokens") is not None or self.requeue_count:
+            stats["draft_accept"] = draft_accept
+            stats["draft_reject"] = draft_reject
+        return stats
+
+    def abort(self, backend_job: Any, request_id: str, reason: str, full_text: str) -> dict:
+        now = self._clock()
+        self._sync_generated_from_job(backend_job)
+        prefill_complete = bool(
+            self.generated_tokens or getattr(backend_job, "time_first_token", None) is not None
+        )
+        if not self._initial_captured:
+            self._capture_initial(
+                backend_job,
+                finalized=False,
+                prefill_complete=prefill_complete,
+            )
+
+        _, _, gen_time = self._live_job_times(backend_job, now)
+        total_time = max(now - self.started_at, 0.0)
+        stats = self._base_stats(gen_time, total_time)
+        stats.update(
+            {
+                "request_id": request_id,
+                "finish_reason": reason,
+                "eos_reason": reason,
+                "stop_str": None,
+                "full_text": full_text,
+            }
+        )
+        draft_accept, draft_reject = self._draft_totals(backend_job)
+        if draft_accept or draft_reject or self.requeue_count:
+            stats["draft_accept"] = draft_accept
+            stats["draft_reject"] = draft_reject
+        return stats
 
 
 class ExllamaV3Container:
@@ -1062,7 +1354,7 @@ class ExllamaV3Container:
                 yield generation_chunk
         finally:
             # Clean up and remove the job from active IDs
-            del self.active_job_ids[request_id]
+            self.active_job_ids.pop(request_id, None)
 
     def constrain_generation_output(self, request_id: str, text: str) -> bool:
         """
@@ -1145,7 +1437,13 @@ class ExllamaV3Container:
 
         generation["logprobs_content"] = content
 
-    def handle_finish_chunk(self, result: dict, request_id: str, full_text: str):
+    def handle_finish_chunk(
+        self,
+        result: dict,
+        request_id: str,
+        full_text: str,
+        logical_metrics: Optional[_LogicalGenerationMetrics] = None,
+    ):
         eos_reason = result.get("eos_reason")
 
         stop_str = None
@@ -1170,54 +1468,45 @@ class ExllamaV3Container:
                     },
                 )
 
-        # Prompt
-        prompt_tokens = result.get("prompt_tokens")
-        cached_tokens = round(result.get("cached_tokens"), 2)
-        prompt_time = round(result.get("time_prefill"), 2)
-        prompt_ts = (
-            "Indeterminate"
-            if prompt_time == 0
-            else round((prompt_tokens - cached_tokens) / prompt_time, 2)
-        )
-
-        # Generated
-        gen_tokens = result.get("new_tokens")
-        gen_time = result.get("time_generate")
-        gen_ts = "Indeterminate" if gen_time == 0 else round(gen_tokens / gen_time, 2)
-
-        # Queue + Total
-        queue_time = result.get("time_enqueued")
-        total_time = round(queue_time + prompt_time + gen_time, 2)
-
-        # Drafting
-        accepted_draft_tokens = result.get("accepted_draft_tokens")
-        rejected_draft_tokens = result.get("rejected_draft_tokens")
+        if logical_metrics is not None:
+            stats = logical_metrics.finish(result)
+        else:
+            prompt_tokens = result.get("prompt_tokens")
+            cached_tokens = round(result.get("cached_tokens"), 2)
+            prompt_time = round(result.get("time_prefill"), 2)
+            gen_tokens = result.get("new_tokens")
+            gen_time = result.get("time_generate")
+            queue_time = result.get("time_enqueued")
+            stats = {
+                "prompt_tokens": prompt_tokens,
+                "prompt_time": prompt_time,
+                "prompt_tokens_per_sec": (
+                    "Indeterminate"
+                    if prompt_time == 0
+                    else round(prompt_tokens / prompt_time, 2)
+                ),
+                "gen_tokens": gen_tokens,
+                "gen_time": round(gen_time, 2),
+                "gen_tokens_per_sec": (
+                    "Indeterminate" if gen_time == 0 else round(gen_tokens / gen_time, 2)
+                ),
+                "total_time": round(queue_time + prompt_time + gen_time, 2),
+                "queue_time": round(queue_time, 2),
+                "cached_tokens": cached_tokens,
+            }
 
         finish_chunk = {
             "request_id": request_id,
-            "prompt_tokens": prompt_tokens,
-            "prompt_time": round(prompt_time, 2),
-            "prompt_tokens_per_sec": prompt_ts,
-            "gen_tokens": gen_tokens,
-            "gen_time": round(gen_time, 2),
-            "gen_tokens_per_sec": gen_ts,
-            "total_time": total_time,
-            "queue_time": round(queue_time, 2),
-            "cached_tokens": cached_tokens,
+            **stats,
             "finish_reason": finish_reason,
             "eos_reason": eos_reason,
             "stop_str": stop_str,
             "full_text": full_text,
         }
 
-        # TODO: Add extended draft stats in backend
-        if accepted_draft_tokens is not None:
-            finish_chunk.update(
-                {
-                    "draft_accept": accepted_draft_tokens,
-                    "draft_reject": rejected_draft_tokens,
-                }
-            )
+        if logical_metrics is None and result.get("accepted_draft_tokens") is not None:
+            finish_chunk["draft_accept"] = result.get("accepted_draft_tokens")
+            finish_chunk["draft_reject"] = result.get("rejected_draft_tokens")
 
         return finish_chunk
 
@@ -1402,6 +1691,7 @@ class ExllamaV3Container:
                 )
 
         generation = {}
+        logical_metrics = _LogicalGenerationMetrics(context_len)
         job = AsyncJob(
             self.generator,
             sampler=sampler,
@@ -1419,6 +1709,7 @@ class ExllamaV3Container:
             stop_on_loop=params.get_stop_on_loop(),
             filters=grammar_handler.filters,
         )
+        logical_metrics.attach(job.job)
         self.active_job_ids[request_id] = job
         await disconnect_handler.add_cleanup_task(id(job), job.cancel, ())
 
@@ -1439,11 +1730,9 @@ class ExllamaV3Container:
 
                 # Track chunk-by-chunk prefill progress for the dashboard
                 if result.get("stage") == "prefill":
-                    collector.note_prefill_progress(
-                        request_id,
-                        unwrap(result.get("curr_progress"), 0),
-                        unwrap(result.get("max_progress"), 0),
-                    )
+                    progress = logical_metrics.note_prefill(result)
+                    if progress is not None:
+                        collector.note_prefill_progress(request_id, *progress)
 
                 # The generator can produce several results per iteration
                 # (speculative decoding), while this consumer may only get one
@@ -1460,6 +1749,11 @@ class ExllamaV3Container:
                         if not isinstance(nxt, dict):
                             # Cancellation sentinel: stop consuming
                             raise CancelledError("Job cancelled while draining results")
+                        if nxt.get("stage") == "prefill":
+                            progress = logical_metrics.note_prefill(nxt)
+                            if progress is not None:
+                                collector.note_prefill_progress(request_id, *progress)
+                            continue
                         if nxt.get("stage") != "streaming":
                             continue
                         span.append(nxt)
@@ -1469,32 +1763,23 @@ class ExllamaV3Container:
                         result = _merge_stream_results(span)
 
                 chunk = unwrap(result.get("text"), "")
-                if chunk:
+                chunk_tokens = result.get("token_ids")
+                if chunk_tokens is None and chunk:
+                    chunk_tokens = self.tokenizer.encode(chunk)
+                token_id_list = _token_ids_to_list(chunk_tokens)
+
+                if token_id_list:
                     if not prefill_reported:
                         # First decoded token: prefill is over, so the progress bar
                         # must stop here instead of hanging at 100% until decode ends
                         prefill_reported = True
                         collector.note_prefill_finished(request_id)
-
-                    chunk_tokens = result.get("token_ids", self.tokenizer.encode(chunk))
-                    full_response += chunk
-
-                    # Extract token IDs as a plain list for downstream consumers
-                    if isinstance(chunk_tokens, torch.Tensor):
-                        token_id_list = chunk_tokens.flatten().tolist()
-                        generated_tokens += len(token_id_list)
-                    elif isinstance(chunk_tokens, tuple):
-                        first = chunk_tokens[0]
-                        if isinstance(first, torch.Tensor):
-                            token_id_list = first.flatten().tolist()
-                        else:
-                            token_id_list = list(first)
-                        generated_tokens += len(token_id_list)
-                    else:
-                        token_id_list = list(chunk_tokens)
-                        generated_tokens += len(token_id_list)
-
+                    logical_metrics.note_generated_tokens(len(token_id_list), result)
+                    generated_tokens += len(token_id_list)
                     collector.note_stream_tokens(request_id, len(token_id_list))
+
+                if chunk:
+                    full_response += chunk
 
                     # Increase penalty range to generated token amount
                     # TODO:
@@ -1517,7 +1802,12 @@ class ExllamaV3Container:
 
                 if result.get("eos"):
                     xlogger.debug("EOS result received from generator", result)
-                    finish_chunk = self.handle_finish_chunk(result, request_id, full_response)
+                    finish_chunk = self.handle_finish_chunk(
+                        result,
+                        request_id,
+                        full_response,
+                        logical_metrics,
+                    )
                     await disconnect_handler.finish(id(job))
 
                     # Save the final result for metrics logging
@@ -1528,12 +1818,37 @@ class ExllamaV3Container:
             else:
                 # The job drained without ever reporting eos
                 if not metrics_result:
-                    abort_reason = "incomplete"
+                    abort_reason = "cancelled" if job.cancelled else "incomplete"
+
+            # A dashboard cancellation ends the AsyncJob iterator cleanly. Emit
+            # one real final chunk so streaming clients can receive correct usage
+            # instead of a fabricated successful stop with missing metrics.
+            if not metrics_result:
+                metrics_result = logical_metrics.abort(
+                    job.job,
+                    request_id,
+                    abort_reason or "cancelled",
+                    full_response,
+                )
+                await disconnect_handler.finish(id(job))
+                yield metrics_result
 
         except CancelledError:
             abort_reason = "cancelled"
+            cancelled_from_dashboard = (
+                job.cancelled and not disconnect_handler.disconnected
+            )
             if not job.cancelled:
                 await job.cancel()
+            if cancelled_from_dashboard:
+                metrics_result = logical_metrics.abort(
+                    job.job,
+                    request_id,
+                    abort_reason,
+                    full_response,
+                )
+                await disconnect_handler.finish(id(job))
+                yield metrics_result
 
         except Exception as ex:
             abort_reason = "error"
@@ -1556,12 +1871,24 @@ class ExllamaV3Container:
 
             raise ex
         finally:
-            # A generation that never produced a finish chunk - cancelled, client
-            # gone, ended early or failed - still consumed real compute. Record it
-            # from the live counters so it does not silently vanish from the stats.
+            # A disconnect/error cannot yield a final API chunk, but it still has
+            # enough live backend state to produce a fully scored dashboard row.
             if not metrics_result:
-                collector.record_aborted(request_id, abort_reason or "cancelled")
+                metrics_result = logical_metrics.abort(
+                    job.job,
+                    request_id,
+                    abort_reason or "cancelled",
+                    full_response,
+                )
 
+            collector.note_prefill_finished(
+                request_id,
+                metrics_result.get("prefill_tokens"),
+            )
+            collector.reconcile_stream_tokens(
+                request_id,
+                metrics_result.get("gen_tokens", 0),
+            )
             collector.note_request_finished(request_id)
 
             # Log generation options to console

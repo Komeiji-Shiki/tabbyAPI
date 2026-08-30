@@ -58,6 +58,7 @@ class LiveRequestTrackingTests(unittest.TestCase):
         self.assertEqual(live["gen_tokens"], 21)
         # prefill must land on its full length instead of hanging below it
         self.assertEqual(live["prefill_curr"], 123)
+        self.assertEqual(sum(bucket[1] for bucket in self.collector._buckets.values()), 123)
 
         self.collector.note_request_finished("r9")
         self.assertEqual(self.collector.live_requests(), [])
@@ -67,6 +68,18 @@ class LiveRequestTrackingTests(unittest.TestCase):
         self.assertEqual(self.collector.live_requests(), [])
         series = self.collector.series(30)
         self.assertTrue(any(v for v in series["generated"]))
+
+    def test_finish_reconciles_unstreamed_tokens_and_prefill(self):
+        self.collector.note_request_started("r10", 100)
+        self.collector.note_stream_tokens("r10", 9)
+        self.collector.reconcile_stream_tokens("r10", 10)
+        self.collector.note_prefill_finished("r10", 40)
+
+        live = self.collector.live_requests()[0]
+        self.assertEqual(live["gen_tokens"], 10)
+        self.assertEqual(live["prefill_curr"], 40)
+        self.assertEqual(sum(bucket[0] for bucket in self.collector._buckets.values()), 10)
+        self.assertEqual(sum(bucket[1] for bucket in self.collector._buckets.values()), 40)
 
 
 class AbortedGenerationTests(unittest.TestCase):
@@ -139,6 +152,33 @@ class AbortedGenerationTests(unittest.TestCase):
         self.assertIsNone(overview["averages"]["gen_tokens_per_sec"])
         self.assertIsNone(overview["cache"]["hit_ratio"])
         self.assertEqual(overview["totals"]["gen_tokens"], 1)
+
+    def test_cancelled_request_with_backend_metrics_is_fully_scored(self):
+        data = completed("known", 1000, 600.0, 80, prompt_time=2.0, gen_time=4.0)
+        data["finish_reason"] = "cancelled"
+        data["eos_reason"] = "cancelled"
+        data["prefill_tokens"] = 1000
+        self.collector.record_generation(data)
+
+        overview = self.collector.overview()
+        self.assertEqual(overview["totals"]["cancelled_requests"], 1)
+        self.assertEqual(overview["cache"]["hit_ratio"], 0.6)
+        self.assertEqual(overview["averages"]["prefill_tokens_per_sec"], 500.0)
+        self.assertEqual(overview["averages"]["gen_tokens_per_sec"], 20.0)
+        self.assertEqual(overview["recent"][0]["cached_tokens"], 600.0)
+        self.assertEqual(overview["recent"][0]["gen_tps"], 20.0)
+
+    def test_zero_duration_tokens_do_not_inflate_scored_rates(self):
+        self.collector.record_generation(
+            completed("instant", 100, 0.0, 10, prompt_time=0.0, gen_time=0.0)
+        )
+        self.collector.record_generation(
+            completed("measured", 100, 0.0, 20, prompt_time=2.0, gen_time=4.0)
+        )
+
+        averages = self.collector.overview()["averages"]
+        self.assertEqual(averages["prefill_tokens_per_sec"], 50.0)
+        self.assertEqual(averages["gen_tokens_per_sec"], 5.0)
 
 
 class GenerationStoreReplayTests(unittest.TestCase):
