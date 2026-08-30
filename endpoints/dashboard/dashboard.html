@@ -150,6 +150,29 @@
   .phase.generate { color: var(--accent); border-color: var(--accent); }
   .phase.queued { color: var(--yellow); border-color: var(--yellow); }
   .empty { color: var(--muted); font-size: 12px; }
+  tr.aborted td { color: var(--yellow); }
+  tr.aborted td.small { color: var(--yellow); }
+  .form-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
+    gap: 10px 14px;
+  }
+  .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .field > .name { font-size: 12px; color: var(--muted); }
+  .field input[type=text], .field select { width: 100%; }
+  .field.check { flex-direction: row; align-items: center; gap: 7px; }
+  .field.check > .name { flex: 1; }
+  .field.off { opacity: .35; }
+  input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
+  .group + .group { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .subhead { font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 8px; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.65; margin-top: 8px; }
+  .badge {
+    font-size: 11px; color: var(--yellow); border: 1px dashed var(--yellow);
+    border-radius: 6px; padding: 0 6px;
+  }
+  .actions-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 13px; flex-wrap: wrap; }
+  .rt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .rt-head .t { margin: 0; }
 </style>
 </head>
 <body>
@@ -187,6 +210,11 @@
       <div class="sub">近期 <span id="k-hit-recent">—</span> · 缓存 <span id="k-cached">—</span> T</div>
     </div>
     <div class="card">
+      <div class="label">草稿接受率</div>
+      <div class="value purple" id="k-accept">—</div>
+      <div class="sub" id="k-accept-sub">未启用草稿</div>
+    </div>
+    <div class="card">
       <div class="label">KV 缓存占用</div>
       <div class="value" id="k-kv">—</div>
       <div class="bar"><div id="k-kv-bar" style="width:0%"></div></div>
@@ -211,7 +239,7 @@
     <div class="card">
       <div class="label">累计生成</div>
       <div class="value" id="k-total-gen">—</div>
-      <div class="sub"><span id="k-total-req">—</span> 次请求 · 预填 <span id="k-total-prompt">—</span> T</div>
+      <div class="sub"><span id="k-total-req">—</span> 次请求 · 预填 <span id="k-total-prompt">—</span> T<br><span id="k-cancelled" class="muted"></span></div>
     </div>
   </section>
 
@@ -243,6 +271,7 @@
       <div class="head">
         <span>最近生成记录</span>
         <span class="grow"></span>
+        <span class="small muted" id="store-note"></span>
         <button class="danger small" id="btn-reset">清空统计</button>
       </div>
       <div class="body scroll">
@@ -275,23 +304,73 @@
           </div>
         </div>
         <div class="row">
-          <div class="t">运行时参数（需重载模型生效，会中断当前生成）<span class="small muted" id="rt-note"></span></div>
-          <div class="inline-form">
-            <label>上下文长度 <input type="text" id="rt-max-seq" inputmode="numeric"></label>
-            <label>缓存大小 <input type="text" id="rt-cache-size" inputmode="numeric"></label>
-            <label>chunk <input type="text" id="rt-chunk" class="narrow" inputmode="numeric"></label>
-            <label>草稿模式
-              <select id="rt-draft-mode">
-                <option value="model">model（外部草稿模型）</option>
-                <option value="mtp">mtp（模型自带 MTP）</option>
-                <option value="ngram">ngram</option>
-                <option value="disabled">disabled</option>
-              </select>
-            </label>
-            <label>草稿模型 <input type="text" id="rt-draft-name" placeholder="仅 model 模式必填"></label>
-            <label>草稿长 <input type="text" id="rt-draft-tokens" class="narrow" inputmode="numeric"></label>
+          <div class="rt-head">
+            <span class="t">运行时参数</span>
+            <span class="small muted">改动需重载模型生效，会中断进行中的生成</span>
+            <span class="badge hidden" id="rt-dirty-badge">有未应用的修改</span>
+            <span class="small muted" id="rt-note"></span>
+          </div>
+          <div class="hint" id="rt-cap"></div>
+
+          <div class="group">
+            <div class="subhead">上下文与显存</div>
+            <div class="form-grid">
+              <label class="field"><span class="name">上下文长度（token）</span><input type="text" id="rt-max-seq" inputmode="numeric"></label>
+              <label class="field"><span class="name">KV 缓存（256 倍数）</span><input type="text" id="rt-cache-size" inputmode="numeric"></label>
+              <label class="field"><span class="name">缓存精度</span>
+                <select id="rt-cache-mode">
+                  <option value="">留空＝继承 config</option>
+                  <option value="FP16">FP16・最保精度</option>
+                  <option value="Q8">Q8</option>
+                  <option value="Q6">Q6</option>
+                  <option value="Q4">Q4・最省显存</option>
+                </select></label>
+              <label class="field"><span class="name">并发批次 batch</span><input type="text" id="rt-batch" inputmode="numeric"></label>
+              <label class="field"><span class="name">预填 chunk</span><input type="text" id="rt-chunk" inputmode="numeric"></label>
+              <label class="field check"><input type="checkbox" id="rt-out-chunk"><span class="name">输出分块分配（省显存）</span></label>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="subhead">投机解码（草稿）</div>
+            <div class="form-grid">
+              <label class="field"><span class="name">草稿模式</span>
+                <select id="rt-draft-mode">
+                  <option value="disabled">disabled・关闭</option>
+                  <option value="mtp">mtp・用模型自带 MTP</option>
+                  <option value="ngram">ngram・不需额外模型</option>
+                  <option value="model">model・外部草稿模型</option>
+                </select></label>
+              <label class="field"><span class="name">草稿长度（留空＝默认）</span><input type="text" id="rt-draft-tokens" inputmode="numeric"></label>
+              <label class="field check"><input type="checkbox" id="rt-dynamic-draft"><span class="name">动态草稿长度（按接受率自适应）</span></label>
+              <label class="field"><span class="name">ngram 最小匹配</span><input type="text" id="rt-ngram-min" inputmode="numeric"></label>
+              <label class="field"><span class="name">草稿模型名</span><input type="text" id="rt-draft-name" placeholder="仅 model 模式：models 下的目录名"></label>
+              <label class="field"><span class="name">草稿缓存精度</span>
+                <select id="rt-draft-cache-mode">
+                  <option value="">留空＝继承 config</option>
+                  <option value="FP16">FP16</option>
+                  <option value="Q8">Q8</option>
+                  <option value="Q6">Q6</option>
+                  <option value="Q4">Q4</option>
+                </select></label>
+            </div>
+            <div class="hint" id="rt-draft-hint"></div>
+          </div>
+
+          <div class="group">
+            <div class="subhead">视觉输入</div>
+            <div class="form-grid">
+              <label class="field check"><input type="checkbox" id="rt-vision"><span class="name">启用视觉</span></label>
+              <label class="field check"><input type="checkbox" id="rt-vision-offload"><span class="name">视觉权重放内存（省显存、较慢）</span></label>
+            </div>
+          </div>
+
+          <div class="actions-row">
+            <button id="btn-rt-current">填回当前生效值</button>
+            <button id="btn-rt-default">填回 config.yml 值</button>
             <button id="btn-reload" class="primary">应用并重载模型</button>
           </div>
+          <div class="loadlog small" id="rt-log"></div>
         </div>
         <div class="row">
           <div class="t">模型（选好后点「加载模型」即切换，会自动卸载当前模型）<span class="small muted" id="run-info"></span></div>
@@ -532,6 +611,17 @@ function render(ov) {
   $("k-hit-recent").textContent = pct(rt.cache.recent_hit_ratio);
   $("k-cached").textContent = fmt(rt.cache.cached_tokens);
 
+  const accept = rt.averages.draft_accept_ratio;
+  $("k-accept").textContent = accept == null ? "—" : pct(accept, 1);
+  if (!be.model_loaded) {
+    $("k-accept-sub").textContent = "模型未加载";
+  } else if (!be.draft_mode || be.draft_mode === "disabled") {
+    $("k-accept-sub").textContent = "未启用草稿";
+  } else {
+    const len = be.draft_num_tokens ?? (be.default_draft_size ?? "默认");
+    $("k-accept-sub").textContent = `${be.draft_mode} · 每步草稿 ${len} T`;
+  }
+
   if (be.kv && be.kv.usage != null) {
     $("k-kv").textContent = pct(be.kv.usage, 1);
     $("k-kv-bar").style.width = Math.min(be.kv.usage * 100, 100) + "%";
@@ -564,8 +654,21 @@ function render(ov) {
   $("k-total-req").textContent = fmt(rt.totals.requests);
   $("k-total-prompt").textContent = fmt(rt.totals.prompt_tokens);
 
+  const cancelled = rt.totals.cancelled_requests || 0;
+  $("k-cancelled").textContent = cancelled
+    ? `含 ${fmt(cancelled)} 次中断，共 ${fmt(rt.totals.cancelled_gen_tokens)} T 输出`
+    : "无中断请求";
+
   drawChart(rt.series);
   $("chart-window").textContent = (rt.series.window || 180);
+
+  const st = ov.stats || {};
+  $("store-note").textContent = st.persisted
+    ? `已落盘 ${fmt(st.stored_records)} 条 · 本次启动恢复 ${fmt(st.restored)} 条`
+    : "仅内存，重启后清空";
+  $("btn-reset").title = st.persisted
+    ? "同时删除磁盘上的存档记录"
+    : "清空内存统计";
 
   renderJobs(ov);
   renderRecent(rt.recent);
@@ -631,7 +734,7 @@ function renderRecent(recent) {
     return;
   }
   body.innerHTML = recent.map((r) => `
-    <tr>
+    <tr class="${r.cached_tokens === null || r.cached_tokens === undefined ? "aborted" : ""}">
       <td>${timeOf(r.ts)}</td>
       <td class="num">${fmt(r.prompt_tokens)}</td>
       <td class="num" title="前缀缓存命中">${fmt(r.cached_tokens)}</td>
@@ -755,8 +858,8 @@ async function loadModel() {
 }
 
 // 重载模型并跟踪 SSE 进度（加载与带参数重载共用这一条链路）
-async function streamLoad(body) {
-  const log = $("loadlog");
+async function streamLoad(body, logId = "loadlog") {
+  const log = $(logId);
   log.textContent = "";
   $("btn-load").disabled = true;
   $("btn-reload").disabled = true;
@@ -804,29 +907,190 @@ async function streamLoad(body) {
 }
 
 // ---------------------------------------------------------------- 运行时参数
-const RT_FIELDS = {
-  "rt-max-seq": "max_seq_len",
-  "rt-cache-size": "cache_size",
-  "rt-chunk": "chunk_size",
-  "rt-draft-mode": "draft_mode",
-  "rt-draft-tokens": "draft_num_tokens",
-};
+// 控件与后端快照键的对应关系集中在这里，draft: true 的字段嵌进 draft_model 发送。
+const RT_FIELDS = [
+  { id: "rt-max-seq", key: "max_seq_len", kind: "int" },
+  { id: "rt-cache-size", key: "cache_size", kind: "int" },
+  { id: "rt-cache-mode", key: "cache_mode", kind: "text" },
+  { id: "rt-batch", key: "max_batch_size", kind: "int" },
+  { id: "rt-chunk", key: "chunk_size", kind: "int" },
+  { id: "rt-out-chunk", key: "output_chunking", kind: "bool" },
+  { id: "rt-vision", key: "vision", kind: "bool" },
+  { id: "rt-vision-offload", key: "vision_offload", kind: "bool" },
+  { id: "rt-draft-mode", key: "draft_mode", kind: "text", draft: true },
+  { id: "rt-draft-tokens", key: "draft_num_tokens", kind: "int", draft: true },
+  { id: "rt-dynamic-draft", key: "dynamic_draft", kind: "bool", draft: true },
+  { id: "rt-ngram-min", key: "ngram_match_min", kind: "int", draft: true },
+  { id: "rt-draft-name", key: "draft_model_name", kind: "text", draft: true },
+  { id: "rt-draft-cache-mode", key: "draft_cache_mode", kind: "text", draft: true },
+];
+
+function rtSetField(f, raw) {
+  const el = $(f.id);
+  if (f.kind === "bool") {
+    el.checked = raw === true;
+    return;
+  }
+  let v = raw;
+  if (f.key === "draft_mode" && !v) v = "disabled";
+  if (v === undefined || v === null) v = "";
+  if (String(el.value) !== String(v)) el.value = v;
+}
+
+// 草稿模式的子选项只在该模式下有意义，灰掉比藏起来更容易看懂
+function fieldEnabled(f, mode) {
+  if (!f.draft) return true;
+  if (mode === "disabled") return f.key === "draft_mode";
+  if (mode === "ngram") {
+    return f.key !== "draft_model_name" && f.key !== "draft_cache_mode";
+  }
+  if (mode === "model") return f.key !== "ngram_match_min";
+  return f.key !== "ngram_match_min" && f.key !== "draft_model_name";
+}
+
+function markDirty() {
+  const pending = RT_FIELDS.some((f) => S.rtDirty[f.id]);
+  $("rt-dirty-badge").classList.toggle("hidden", !pending);
+}
+
+function updateRuntimeHints(be) {
+  const mode = $("rt-draft-mode").value || "disabled";
+  for (const f of RT_FIELDS) {
+    const on = fieldEnabled(f, mode);
+    const el = $(f.id);
+    el.disabled = !on;
+    el.closest(".field").classList.toggle("off", !on);
+  }
+
+  const cap = be.max_position_embeddings;
+  const seq = be.max_seq_len;
+  let capText = "留空的字段不发送，沿用 config.yml 的值。";
+  if (cap && seq) {
+    capText += `模型原生支持 ${fmt(cap)} token，当前 ${fmt(seq)}`;
+    capText += cap > seq
+      ? "；显存充裕可以继续加大，KV 缓存需同步为 256 倍数且不小于上下文长度。"
+      : "；已用到模型上限。";
+  }
+  if (be.max_batch_size) {
+    capText += ` 当前并发批次 ${fmt(be.max_batch_size)}，缓存与草稿开销都按批次倍数增长。`;
+  }
+  $("rt-cap").textContent = capText;
+
+  const accept = (((S.overview || {}).runtime || {}).averages || {}).draft_accept_ratio;
+  let hint;
+  if (mode === "disabled") {
+    hint = "关闭时不做投机解码。想提速优先试 mtp：它复用 checkpoint 自带的 MTP 头，不必再装一个草稿模型。";
+  } else if (mode === "ngram") {
+    hint = "ngram 从当前上下文里拼重复片段当草稿，不额外占显存；代码、模板化回复这类高重复输出收益最明显。";
+  } else if (mode === "model") {
+    hint = "外部草稿模型会额外吃一份显存（权重 + 自己的 KV 缓存），单卡上通常不如 mtp 划算。";
+  } else {
+    hint = "mtp 复用模型自带的 MTP 组件做草稿，是本机最省事的提速方式。";
+  }
+  if (mode !== "disabled") {
+    const def = be.default_draft_size;
+    hint += ` 草稿长度留空即沿用后端默认${def ? `（本模型为 ${def}）` : ""}；`
+      + "填得越长每步验证成本越高，接受率会落。";
+    if (accept === null || accept === undefined) {
+      hint += "开起来跑几次生成，这里会显示实测接受率，用它定长度比拍脑袋填数字可靠。";
+    } else if (accept < 0.35) {
+      hint += ` 当前实测接受率 ${pct(accept, 1)}，偏低：建议调小草稿长度或勾选动态草稿。`;
+    } else if (accept > 0.75) {
+      hint += ` 当前实测接受率 ${pct(accept, 1)}，很高：可以试着加大草稿长度。`;
+    } else {
+      hint += ` 当前实测接受率 ${pct(accept, 1)}，处在合理区间。`;
+    }
+  }
+  $("rt-draft-hint").textContent = hint;
+  markDirty();
+}
 
 function syncRuntimeInputs(be) {
-  for (const [id, key] of Object.entries(RT_FIELDS)) {
-    const el = $(id);
-    // 主人正在编辑的值不能被轮询回来，也不动获得焦点的输入框
-    if (S.rtDirty[id] || document.activeElement === el) continue;
-    let v = be[key];
-    if (key === "draft_mode" && !v) v = "disabled";
-    if (v === undefined || v === null) v = "";
-    if (String(el.value) !== String(v)) el.value = v;
+  for (const f of RT_FIELDS) {
+    // 主人改过或正在填的控件不被轮询覆盖
+    const el = $(f.id);
+    if (S.rtDirty[f.id] || document.activeElement === el) continue;
+    rtSetField(f, be[f.key]);
   }
-  const cfgDraft = ((S.overview || {}).config || {}).draft_model || {};
-  const cfgMode = (cfgDraft.fields || []).find((f) => f.key === "draft_mode");
-  $("rt-note").textContent = be.draft_mode
-    ? `· 运行时 ${be.draft_mode}，config.yml 为 ${cfgMode && cfgMode.value ? cfgMode.value : "default"}`
+  updateRuntimeHints(be);
+
+  const ov = S.overview || {};
+  const cfgMode = (((ov.config || {}).draft_model || {}).fields || [])
+    .find((x) => x.key === "draft_mode");
+  $("rt-note").textContent = be.model_loaded && be.draft_mode
+    ? `｜当前生效：${be.draft_mode}｜config.yml：${cfgMode && cfgMode.value ? cfgMode.value : "默认"}`
     : "";
+}
+
+// 把表单填成 config.yml 里的值，方便对比“服务器配置”与“运行现状”
+function fillRuntimeFromConfig() {
+  const cfg = (S.overview || {}).config || {};
+  const grab = (section, key) => {
+    const hit = ((cfg[section] || {}).fields || []).find((f) => f.key === key);
+    return hit ? hit.value : undefined;
+  };
+  for (const f of RT_FIELDS) {
+    const v = f.draft ? grab("draft_model", f.key) : grab("model", f.key);
+    rtSetField(f, v === undefined ? "" : v);
+    S.rtDirty[f.id] = true;
+  }
+  updateRuntimeHints((S.overview || {}).backend || {});
+}
+
+function fillRuntimeFromBackend() {
+  S.rtDirty = {};
+  syncRuntimeInputs((S.overview || {}).backend || {});
+}
+
+// 收集表单。留空的字段不发送，让它回落到 config.yml。
+function readRuntimeForm() {
+  const be = (S.overview || {}).backend || {};
+  const mode = $("rt-draft-mode").value || "disabled";
+  const top = {};
+  const draft = { draft_mode: mode };
+  const errors = [];
+
+  for (const f of RT_FIELDS) {
+    if (!fieldEnabled(f, mode)) continue;
+    const el = $(f.id);
+    let value;
+    if (f.kind === "bool") {
+      value = el.checked;
+    } else {
+      const raw = String(el.value).trim();
+      if (raw === "") continue;
+      value = f.kind === "int" ? parseInt(raw, 10) : raw;
+      if (f.kind === "int" && Number.isNaN(value)) {
+        errors.push(`${el.closest(".field").querySelector(".name").textContent} 必须是整数`);
+        continue;
+      }
+    }
+    if (f.draft) draft[f.key] = value;
+    else top[f.key] = value;
+  }
+
+  const seq = top.max_seq_len ?? be.max_seq_len;
+  const cache = top.cache_size ?? be.cache_size;
+  if (typeof cache === "number" && cache % 256 !== 0) {
+    errors.push("KV 缓存必须是 256 的倍数（后端会向上取整，但最好自己填对）");
+  }
+  if (typeof seq === "number" && typeof cache === "number" && cache < seq) {
+    errors.push(`KV 缓存 ${fmt(cache)} 小于上下文长度 ${fmt(seq)}，后端会把上下文压到缓存大小`);
+  }
+  if (typeof top.max_batch_size === "number" && top.max_batch_size < 1) {
+    errors.push("并发批次至少为 1");
+  }
+  if (typeof top.chunk_size === "number" && top.chunk_size < 256) {
+    errors.push("chunk 小于 256 会被后端抬到 256");
+  }
+  if (mode === "model" && !draft.draft_model_name) {
+    errors.push("model 模式必须填写草稿模型名");
+  }
+  if (mode === "ngram" && typeof draft.ngram_match_min === "number" && draft.ngram_match_min < 1) {
+    errors.push("ngram 最小匹配至少为 1");
+  }
+
+  return { top, draft, errors };
 }
 
 async function reloadWithRuntime() {
@@ -835,33 +1099,12 @@ async function reloadWithRuntime() {
   const name = ov.server.model_name;
   if (!name) return toast("当前没有已加载的模型，请先用下方「加载模型」", "err");
 
-  const seq = parseInt($("rt-max-seq").value, 10);
-  const cache = parseInt($("rt-cache-size").value, 10);
-  const chunk = parseInt($("rt-chunk").value, 10);
-  const mode = $("rt-draft-mode").value;
-  const draftTokens = parseInt($("rt-draft-tokens").value, 10);
+  const { top, draft, errors } = readRuntimeForm();
+  if (errors.length) return toast(errors.join("；"), "err");
 
-  if (!(seq > 0)) return toast("上下文长度必须是正整数", "err");
-  if (!(cache > 0) || cache % 256 !== 0) return toast("缓存大小必须是 256 的正整数倍", "err");
-  if (cache < seq) return toast("缓存大小不能小于上下文长度", "err");
-  if (!(chunk > 0)) return toast("chunk 大小必须是正整数", "err");
-
-  const draft = { draft_mode: mode };
-  if (mode === "model") {
-    const dn = $("rt-draft-name").value.trim();
-    if (!dn) return toast("model 模式必须填写草稿模型名", "err");
-    draft.draft_model_name = dn;
-  }
-  if (draftTokens > 0) draft.draft_num_tokens = draftTokens;
-
-  await streamLoad({
-    model_name: name,
-    max_seq_len: seq,
-    cache_size: cache,
-    chunk_size: chunk,
-    draft_model: draft,
-  });
+  await streamLoad({ model_name: name, ...top, draft_model: draft }, "rt-log");
   S.rtDirty = {};
+  markDirty();
 }
 
 // ---------------------------------------------------------------- 轮询与密钥
@@ -923,13 +1166,22 @@ $("btn-override-unload").onclick = () => { $("sel-override").value = ""; switchO
 $("btn-load").onclick = loadModel;
 $("btn-unload").onclick = unloadModel;
 $("btn-reload").onclick = reloadWithRuntime;
+$("btn-rt-current").onclick = fillRuntimeFromBackend;
+$("btn-rt-default").onclick = fillRuntimeFromConfig;
 $("chart-win").onchange = (e) => {
   S.chartWindow = parseInt(e.target.value, 10) || 180;
   localStorage.setItem("tabby.dash.chartWindow", String(S.chartWindow));
   poll();
 };
-Object.keys(RT_FIELDS).concat(["rt-draft-name"]).forEach((id) => {
-  $(id).addEventListener("input", () => { S.rtDirty[id] = true; });
+RT_FIELDS.forEach((f) => {
+  const el = $(f.id);
+  const on = () => {
+    S.rtDirty[f.id] = true;
+    if (f.id === "rt-draft-mode") updateRuntimeHints((S.overview || {}).backend || {});
+    else markDirty();
+  };
+  el.addEventListener("input", on);
+  el.addEventListener("change", on);
 });
 $("interval").onchange = schedule;
 window.addEventListener("resize", () => S.overview && drawChart(S.overview.runtime.series));
