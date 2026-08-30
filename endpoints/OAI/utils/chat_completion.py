@@ -693,6 +693,7 @@ async def _chat_stream_collector(
             ),
         )
         generation = {"index": task_idx}
+        stream_finished = False
         async for generation in new_generation:
             generation["index"] = task_idx
             text = generation.get("text", "")
@@ -755,7 +756,16 @@ async def _chat_stream_collector(
 
             # End
             if finish_reason:
+                stream_finished = True
                 break
+
+        if streaming_mode and not stream_finished and gen_queue is not None:
+            # The backend generator ended without ever sending a finish chunk
+            # (the job was cancelled, e.g. from the dashboard, or the client
+            # disconnected). Emit a finalization chunk so the consumer loop
+            # completes instead of blocking on the queue forever.
+            generation["finish_reason"] = "stop"
+            await gen_queue.put(generation)
 
         # In non-streaming mode, return everything as a single result
         if not streaming_mode:
