@@ -37,6 +37,7 @@ from common.hardware import hardware_supports_exllamav3
 from common.health import HealthManager
 from common.errors import ContextLengthExceededError, validate_context_requirements
 from common.logger import xlogger
+from common.metrics import collector
 from common.multimodal import MultimodalEmbeddingWrapper
 from common.networking import DisconnectHandler
 from common.optional_dependencies import check_package_version
@@ -1427,6 +1428,14 @@ class ExllamaV3Container:
             async for result in job:
                 await disconnect_handler.poll()
 
+                # Track chunk-by-chunk prefill progress for the dashboard
+                if result.get("stage") == "prefill":
+                    collector.note_prefill_progress(
+                        request_id,
+                        unwrap(result.get("curr_progress"), 0),
+                        unwrap(result.get("max_progress"), 0),
+                    )
+
                 # The generator can produce several results per iteration
                 # (speculative decoding), while this consumer may only get one
                 # scheduling slot per iteration whenever an await above or
@@ -1469,6 +1478,8 @@ class ExllamaV3Container:
                     else:
                         token_id_list = list(chunk_tokens)
                         generated_tokens += len(token_id_list)
+
+                    collector.note_generated_tokens(len(token_id_list))
 
                     # Increase penalty range to generated token amount
                     # TODO:
@@ -1524,6 +1535,8 @@ class ExllamaV3Container:
 
             raise ex
         finally:
+            collector.note_prefill_finished(request_id)
+
             # Log generation options to console
             # Some options are too large, so log the args instead
             log_generation_params(

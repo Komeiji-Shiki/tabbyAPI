@@ -81,6 +81,14 @@ class NetworkConfig(BaseConfigModel):
         ),
         ge=0,
     )
+    enable_dashboard: Optional[bool] = Field(
+        True,
+        description=(
+            "Serve the built-in web dashboard at /dashboard (default: True).\n"
+            "The page itself has no secrets; its data endpoints require an API key\n"
+            "and its actions require the admin key."
+        ),
+    )
 
     # Converts all strings in the api_servers list to lowercase
     # NOTE: Expand if more models need this validator

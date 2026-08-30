@@ -3,6 +3,7 @@ Functions for logging generation events.
 """
 
 from common.logger import xlogger
+from common.metrics import collector
 from typing import Optional
 
 from common.tabby_config import config
@@ -62,6 +63,10 @@ def log_metrics(
     context_len: Optional[int],
     max_seq_len: int,
 ):
+    # Feed the dashboard collector first, so stats are recorded regardless
+    # of whether console metrics logging is enabled
+    collector.record_generation(metrics)
+
     initial_response = (
         f"Metrics (ID: {request_id}): {metrics.get('gen_tokens')} "
         f"tokens generated in {metrics.get('total_time')} seconds"

@@ -36,6 +36,11 @@ network:
   # connections from dropping during long prefills. Set to 0 to disable.
   sse_ping_interval: 15
 
+  # Serve the built-in web dashboard at /dashboard (default: True).
+  # The page itself has no secrets; its data endpoints require an API key
+  # and its actions require the admin key.
+  enable_dashboard: true
+
 # Options for logging
 logging:
   # Enable prompt logging (default: False).

@@ -1,0 +1,776 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TabbyAPI 监控台</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg-2: #161b22;
+    --bg-3: #1c2330;
+    --border: #2d3646;
+    --text: #d6dde6;
+    --muted: #8b98a9;
+    --accent: #4da3ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d29922;
+    --purple: #bc8cff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    font-size: 14px;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 18px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .grow { flex: 1; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.bad { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .dot.off { background: var(--muted); }
+  .chip {
+    background: var(--bg-3); border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 10px; font-size: 12px; color: var(--muted);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  button {
+    background: var(--bg-3); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px;
+  }
+  button:hover { border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.danger:hover { border-color: var(--red); color: var(--red); }
+  button.primary { border-color: var(--accent); color: var(--accent); }
+  select, input[type=text], input[type=password] {
+    background: var(--bg-3); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font-size: 13px; min-width: 0;
+  }
+  main { padding: 16px 18px 40px; max-width: 1500px; margin: 0 auto; }
+  .cards {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    gap: 12px; margin-bottom: 14px;
+  }
+  .card {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 14px;
+  }
+  .card .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .card .value { font-size: 24px; font-weight: 650; line-height: 1.15; }
+  .card .value small { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .card .sub { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .accent { color: var(--accent); }
+  .green { color: var(--green); }
+  .yellow { color: var(--yellow); }
+  .purple { color: var(--purple); }
+  .bar {
+    height: 6px; background: var(--bg-3); border-radius: 3px; overflow: hidden; margin-top: 8px;
+  }
+  .bar > div { height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
+  .panel {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 10px; margin-bottom: 14px; overflow: hidden;
+  }
+  .panel > .head {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px; border-bottom: 1px solid var(--border);
+    font-weight: 600; font-size: 14px;
+  }
+  .panel > .head .grow { flex: 1; }
+  .panel > .body { padding: 12px 14px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media (max-width: 1100px) { .grid2 { grid-template-columns: 1fr; } }
+  canvas#chart { width: 100%; height: 230px; display: block; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 10px; height: 3px; margin-right: 5px; vertical-align: middle; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 5px 9px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--bg-2); }
+  tr:hover td { background: var(--bg-3); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .scroll { max-height: 320px; overflow: auto; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tabs button.active { border-color: var(--accent); color: var(--accent); background: rgba(77,163,255,.08); }
+  .kv td.key { color: var(--muted); width: 230px; }
+  .kv td.desc { color: var(--muted); font-size: 12px; white-space: normal; }
+  .kv td.val { font-variant-numeric: tabular-nums; }
+  .inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row { margin-bottom: 10px; }
+  .row .t { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .toast-zone { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }
+  .toast {
+    background: var(--bg-3); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    padding: 9px 14px; border-radius: 8px; max-width: 380px; font-size: 13px;
+    animation: slidein .25s;
+  }
+  .toast.err { border-left-color: var(--red); }
+  .toast.ok { border-left-color: var(--green); }
+  @keyframes slidein { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.55);
+    display: flex; align-items: center; justify-content: center; z-index: 50;
+  }
+  .modal {
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;
+    width: 400px; max-width: 92vw; padding: 18px;
+  }
+  .modal h2 { font-size: 15px; margin: 0 0 12px; }
+  .modal .row input { width: 100%; }
+  .modal .actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+  .hidden { display: none !important; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12px; }
+  .loadlog { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); max-height: 120px; overflow: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🐱 TabbyAPI 监控台</h1>
+  <span class="chip"><span class="dot off" id="h-dot"></span><span id="h-status">连接中…</span></span>
+  <span class="chip" id="h-model">模型：未加载</span>
+  <span class="chip" id="h-uptime">运行 —</span>
+  <span class="grow"></span>
+  <span class="small muted" id="h-hint"></span>
+  <select id="interval">
+    <option value="2000">2 秒刷新</option>
+    <option value="5000">5 秒刷新</option>
+    <option value="10000">10 秒刷新</option>
+    <option value="0">暂停</option>
+  </select>
+  <button id="btn-keys">密钥</button>
+</header>
+
+<main>
+  <section class="cards">
+    <div class="card">
+      <div class="label">实时生成 TPS</div>
+      <div class="value accent" id="k-tps">—</div>
+      <div class="sub">平均 <span id="k-tps-avg">—</span> T/s</div>
+    </div>
+    <div class="card">
+      <div class="label">实时预填 T/s</div>
+      <div class="value purple" id="k-pps">—</div>
+      <div class="sub">平均 <span id="k-pps-avg">—</span> T/s</div>
+    </div>
+    <div class="card">
+      <div class="label">缓存命中率</div>
+      <div class="value green" id="k-hit">—</div>
+      <div class="sub">近期 <span id="k-hit-recent">—</span> · 缓存 <span id="k-cached">—</span> T</div>
+    </div>
+    <div class="card">
+      <div class="label">KV 缓存占用</div>
+      <div class="value" id="k-kv">—</div>
+      <div class="bar"><div id="k-kv-bar" style="width:0%"></div></div>
+      <div class="sub" id="k-kv-sub">—</div>
+    </div>
+    <div class="card">
+      <div class="label">活跃 / 排队请求</div>
+      <div class="value" id="k-jobs">—</div>
+      <div class="sub">批次上限 <span id="k-batch">—</span></div>
+    </div>
+    <div class="card">
+      <div class="label">GPU 显存</div>
+      <div class="value" id="k-gpu">—</div>
+      <div class="bar"><div id="k-gpu-bar" style="width:0%"></div></div>
+      <div class="sub" id="k-gpu-sub">—</div>
+    </div>
+    <div class="card">
+      <div class="label">CPU（进程 / 系统）</div>
+      <div class="value" id="k-cpu">—</div>
+      <div class="sub">内存 <span id="k-ram">—</span></div>
+    </div>
+    <div class="card">
+      <div class="label">累计生成</div>
+      <div class="value" id="k-total-gen">—</div>
+      <div class="sub"><span id="k-total-req">—</span> 次请求 · 预填 <span id="k-total-prompt">—</span> T</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="head">
+      <span>令牌速率（最近 <span id="chart-window">180</span> 秒）</span>
+      <span class="grow"></span>
+      <span class="legend">
+        <span><i style="background:#4da3ff"></i>生成 T/s</span>
+        <span><i style="background:#bc8cff"></i>预填 T/s</span>
+      </span>
+    </div>
+    <div class="body"><canvas id="chart"></canvas></div>
+  </section>
+
+  <section class="panel" id="jobs-panel">
+    <div class="head"><span>正在生成的请求</span><span class="grow"></span><span class="small muted">prefill 进度实时显示</span></div>
+    <div class="body" id="jobs-body"><span class="muted small">当前没有进行中的请求</span></div>
+  </section>
+
+  <div class="grid2">
+    <section class="panel">
+      <div class="head">
+        <span>最近生成记录</span>
+        <span class="grow"></span>
+        <button class="danger small" id="btn-reset">清空统计</button>
+      </div>
+      <div class="body scroll">
+        <table>
+          <thead>
+            <tr><th>时间</th><th class="num">提示词</th><th class="num">缓存</th><th class="num">生成</th><th class="num">生成T/s</th><th class="num">预填T/s</th><th class="num">排队</th><th>结束原因</th></tr>
+          </thead>
+          <tbody id="recent-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="head"><span>操作</span><span class="grow"></span><span class="small muted">需要 admin 密钥</span></div>
+      <div class="body">
+        <div class="row">
+          <div class="t">聊天模板</div>
+          <div class="inline-form">
+            <select id="sel-template"></select>
+            <button id="btn-template">切换模板</button>
+            <button id="btn-template-unload">卸载模板</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="t">采样覆盖预设</div>
+          <div class="inline-form">
+            <select id="sel-override"></select>
+            <button id="btn-override">应用预设</button>
+            <button id="btn-override-unload">清除覆盖</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="t">模型 <span class="small muted" id="run-info"></span></div>
+          <div class="inline-form">
+            <select id="sel-model"></select>
+            <button id="btn-load" class="primary">加载模型</button>
+            <button id="btn-unload" class="danger">卸载模型</button>
+          </div>
+          <div class="loadlog small" id="loadlog"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <section class="panel">
+    <div class="head"><span>服务器设定</span><span class="grow"></span><span class="small muted" id="cfg-note">当前进程内生效的配置</span></div>
+    <div class="body">
+      <div class="tabs" id="cfg-tabs"></div>
+      <div class="scroll" style="margin-top:10px">
+        <table class="kv">
+          <thead><tr><th>选项</th><th>当前值</th><th>说明</th></tr></thead>
+          <tbody id="cfg-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div class="modal-mask hidden" id="key-modal">
+  <div class="modal">
+    <h2>访问密钥</h2>
+    <div class="row">
+      <div class="t">API 密钥（查看数据）</div>
+      <input type="password" id="in-api" placeholder="X-api-key" autocomplete="off">
+    </div>
+    <div class="row">
+      <div class="t">Admin 密钥（加载/切换/清空等操作用，可留空）</div>
+      <input type="password" id="in-admin" placeholder="X-admin-key" autocomplete="off">
+    </div>
+    <div class="small muted">密钥只保存在本浏览器的 localStorage 中，仅用于向本机 API 请求签名。</div>
+    <div class="actions">
+      <button id="btn-key-cancel">取消</button>
+      <button id="btn-key-save" class="primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast-zone" id="toasts"></div>
+
+<script>
+"use strict";
+
+// ---------------------------------------------------------------- 状态与工具
+const S = {
+  apiKey: localStorage.getItem("tabby.dash.apiKey") || "",
+  adminKey: localStorage.getItem("tabby.dash.adminKey") || "",
+  timer: null,
+  overview: null,
+  offline: false,
+  cfgSection: "network",
+  loadAbort: null,
+};
+
+const $ = (id) => document.getElementById(id);
+
+function fmt(n, digits = 0) {
+  if (n === null || n === undefined || n === "Indeterminate") return "—";
+  if (typeof n === "number" && !isFinite(n)) return "—";
+  return Number(n).toLocaleString("zh-CN", { maximumFractionDigits: digits, minimumFractionDigits: digits });
+}
+
+function pct(x, digits = 1) {
+  if (x === null || x === undefined) return "—";
+  return (x * 100).toFixed(digits) + "%";
+}
+
+function bytes(b) {
+  if (b === null || b === undefined) return "—";
+  const gb = b / 1024 ** 3;
+  if (gb >= 1) return gb.toFixed(2) + " GB";
+  return (b / 1024 ** 2).toFixed(1) + " MB";
+}
+
+function uptime(sec) {
+  if (sec === null || sec === undefined) return "—";
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return (h ? h + " 时 " : "") + (h || m ? m + " 分 " : "") + s + " 秒";
+}
+
+function timeOf(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+function toast(msg, kind = "") {
+  const el = document.createElement("div");
+  el.className = "toast " + kind;
+  el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(() => el.remove(), 5000);
+}
+
+function headers(withAdmin = false) {
+  const h = {};
+  if (S.apiKey) h["x-api-key"] = S.apiKey;
+  if (withAdmin && S.adminKey) h["x-admin-key"] = S.adminKey;
+  return h;
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { "content-type": "application/json", ...headers(true), ...(opts.headers || {}) },
+  });
+  if (res.status === 401) {
+    openKeyModal("此操作需要有效的密钥");
+    throw new Error("401 未授权");
+  }
+  if (!res.ok) {
+    let detail = "";
+    try { detail = (await res.json()).detail || ""; } catch (_) { /* ignore */ }
+    throw new Error(`${res.status} ${detail || res.statusText}`);
+  }
+  return res.status === 204 ? null : res.json();
+}
+
+// ---------------------------------------------------------------- 图表
+function drawChart(series) {
+  const canvas = $("chart");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
+    canvas.width = w * dpr; canvas.height = h * dpr;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  if (!series || !series.generated) return;
+
+  const gen = series.generated, pre = series.prefilled;
+  const n = gen.length;
+  const padL = 46, padR = 8, padT = 8, padB = 20;
+  const cw = w - padL - padR, ch = h - padT - padB;
+
+  let max = 1;
+  for (const v of gen) if (v != null && v > max) max = v;
+  for (const v of pre) if (v != null && v > max) max = v;
+  // 上取整到好看的刻度
+  const pow = Math.pow(10, Math.floor(Math.log10(max)));
+  max = Math.ceil(max / pow) * pow;
+
+  ctx.strokeStyle = "#2d3646";
+  ctx.fillStyle = "#8b98a9";
+  ctx.font = "11px sans-serif";
+  ctx.lineWidth = 1;
+  const steps = 4;
+  for (let i = 0; i <= steps; i++) {
+    const y = padT + ch - (ch * i) / steps;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+    ctx.textAlign = "right";
+    ctx.fillText(fmt(max * i / steps, max < 10 ? 1 : 0), padL - 6, y + 4);
+  }
+  // x 轴时间刻度（-180s ~ 现在）
+  const window = series.window || 180;
+  for (const mark of [0, 0.25, 0.5, 0.75, 1]) {
+    const x = padL + cw * mark;
+    const label = mark === 1 ? "现在" : "-" + Math.round(window * (1 - mark)) + "s";
+    ctx.textAlign = mark === 1 ? "right" : "left";
+    ctx.fillText(label, x + (mark === 1 ? -2 : 2), h - 6);
+  }
+
+  function line(data, color) {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath();
+    let started = false;
+    for (let i = 0; i < n; i++) {
+      const v = data[i];
+      if (v == null) { started = false; continue; }
+      const x = padL + (cw * i) / (n - 1);
+      const y = padT + ch - (ch * Math.min(v / max, 1));
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+  }
+  line(pre, "#bc8cff");
+  line(gen, "#4da3ff");
+}
+
+// ---------------------------------------------------------------- 渲染
+function render(ov) {
+  S.overview = ov;
+  const rt = ov.runtime, be = ov.backend, sys = ov.system, cfg = ov.config;
+
+  $("h-dot").className = "dot " + (ov.health.status === "healthy" ? "ok" : "bad");
+  $("h-status").textContent = ov.health.status === "healthy" ? "服务正常" : "服务异常";
+  if (ov.health.issues && ov.health.issues.length) $("h-status").textContent += "（" + ov.health.issues.join("; ") + "）";
+  $("h-model").textContent = "模型：" + (ov.server.model_name || "未加载") + (ov.server.version ? " · v" + ov.server.version : "");
+  $("h-uptime").textContent = "运行 " + uptime(rt.uptime);
+  $("h-hint").textContent = ov.server.auth_disabled ? "鉴权已关闭（无需密钥）" : (S.adminKey ? "API + Admin 密钥" : "API 密钥");
+
+  $("k-tps").textContent = fmt(rt.live.gen_tokens_per_sec, 1);
+  $("k-tps-avg").textContent = fmt(rt.averages.gen_tokens_per_sec, 1);
+  $("k-pps").textContent = fmt(rt.live.prefill_tokens_per_sec, 0);
+  $("k-pps-avg").textContent = fmt(rt.averages.prefill_tokens_per_sec, 0);
+
+  $("k-hit").textContent = pct(rt.cache.hit_ratio);
+  $("k-hit-recent").textContent = pct(rt.cache.recent_hit_ratio);
+  $("k-cached").textContent = fmt(rt.cache.cached_tokens);
+
+  if (be.kv && be.kv.usage != null) {
+    $("k-kv").textContent = pct(be.kv.usage, 1);
+    $("k-kv-bar").style.width = Math.min(be.kv.usage * 100, 100) + "%";
+    $("k-kv-sub").textContent = fmt(be.kv.used_tokens) + " / " + fmt(be.kv.total_tokens) + " tokens";
+  } else {
+    $("k-kv").textContent = "—";
+    $("k-kv-bar").style.width = "0%";
+    $("k-kv-sub").textContent = be.model_loaded ? "无页表数据" : "模型未加载";
+  }
+
+  const pending = be.pending_jobs ?? 0;
+  $("k-jobs").textContent = (be.active_jobs ?? 0) + " / " + pending;
+  $("k-batch").textContent = fmt(be.max_batch_size);
+
+  if (sys.gpus && sys.gpus.length) {
+    const g = sys.gpus[0];
+    $("k-gpu").textContent = bytes(g.mem_used);
+    $("k-gpu-bar").style.width = Math.min((g.mem_used / g.mem_total) * 100, 100).toFixed(1) + "%";
+    $("k-gpu-sub").textContent = g.name + " · 共 " + bytes(g.mem_total) +
+      (sys.gpus.length > 1 ? " · " + sys.gpus.length + " 张卡" : "");
+  } else {
+    $("k-gpu").textContent = "—";
+    $("k-gpu-sub").textContent = "未检测到 CUDA";
+  }
+
+  $("k-cpu").textContent = fmt(sys.process.cpu_percent, 0) + "% / " + fmt(sys.system.cpu_percent, 0) + "%";
+  $("k-ram").textContent = bytes(sys.process.ram_used) + (sys.system.ram_used ? " / 共 " + bytes(sys.system.ram_total) : "");
+
+  $("k-total-gen").textContent = fmt(rt.totals.gen_tokens);
+  $("k-total-req").textContent = fmt(rt.totals.requests);
+  $("k-total-prompt").textContent = fmt(rt.totals.prompt_tokens);
+
+  drawChart(rt.series);
+  $("chart-window").textContent = (rt.series.window || 180);
+
+  renderJobs(rt, be, ov);
+  renderRecent(rt.recent);
+  renderConfig(cfg);
+
+  // 运行时参数 + 当前模板高亮
+  const mp = (ov.model_info || {}).parameters || {};
+  $("run-info").textContent = ov.model_info
+    ? `· 上下文 ${fmt(mp.max_seq_len)} · cache ${mp.cache_mode} · chunk ${fmt(mp.chunk_size)} · 批次 ${fmt(mp.max_batch_size)}`
+      + (mp.tool_format ? ` · 工具 ${mp.tool_format}` : "")
+    : "· 未加载";
+
+  const tplSel = $("sel-template");
+  if (mp.prompt_template) {
+    for (const op of tplSel.options) {
+      if (op.value === mp.prompt_template || op.value === mp.prompt_template + ".jinja") {
+        tplSel.value = op.value;
+      }
+    }
+  }
+}
+
+function renderJobs(rt, be, ov) {
+  const zone = $("jobs-body");
+  const ids = ov.jobs || [];
+  if (!ids.length) {
+    zone.innerHTML = '<span class="muted small">当前没有进行中的请求</span>';
+    return;
+  }
+  const progress = {};
+  for (const p of rt.live.prefill_progress || []) progress[p.request_id] = p;
+
+  const rows = ids.map((id) => {
+    const p = progress[id];
+    const prefill = p ? `<span class="small muted">预填 ${fmt(p.curr)}/${fmt(p.max)}（${pct(p.curr / Math.max(p.max, 1), 0)}）</span>` : "<span class='small muted'>生成中…</span>";
+    const btn = S.adminKey ? `<button class="danger small" data-cancel="${id}">取消</button>` : "";
+    return `<div class="inline-form" style="margin-bottom:6px"><span class="chip">${id}</span>${prefill}${btn}</div>`;
+  });
+  zone.innerHTML = rows.join("");
+  zone.querySelectorAll("button[data-cancel]").forEach((b) => {
+    b.onclick = () => cancelJob(b.dataset.cancel);
+  });
+}
+
+function renderRecent(recent) {
+  const body = $("recent-body");
+  if (!recent || !recent.length) {
+    body.innerHTML = '<tr><td colspan="8" class="muted">暂无已完成的生成记录</td></tr>';
+    return;
+  }
+  body.innerHTML = recent.map((r) => `
+    <tr>
+      <td>${timeOf(r.ts)}</td>
+      <td class="num">${fmt(r.prompt_tokens)}</td>
+      <td class="num" title="前缀缓存命中">${fmt(r.cached_tokens)}</td>
+      <td class="num">${fmt(r.gen_tokens)}</td>
+      <td class="num accent">${typeof r.gen_tps === "number" ? fmt(r.gen_tps, 1) : "—"}</td>
+      <td class="num purple">${typeof r.prompt_tps === "number" ? fmt(r.prompt_tps, 0) : "—"}</td>
+      <td class="num">${fmt(r.queue_time, 2)}s</td>
+      <td class="small muted">${r.eos_reason || r.finish_reason || "—"}</td>
+    </tr>`).join("");
+}
+
+function fmtValue(v) {
+  if (v === null || v === undefined || v === "") return '<span class="muted">—（默认）</span>';
+  if (typeof v === "boolean") return v ? '<span class="green">true</span>' : "false";
+  if (typeof v === "object") return '<span class="small">' + JSON.stringify(v) + "</span>";
+  return String(v);
+}
+
+function renderConfig(cfg) {
+  const tabs = $("cfg-tabs");
+  if (!tabs.childElementCount) {
+    tabs.innerHTML = Object.keys(cfg).map((name) => `<button data-sec="${name}">${name}</button>`).join("");
+    tabs.querySelectorAll("button").forEach((b) => {
+      b.onclick = () => { S.cfgSection = b.dataset.sec; renderConfig(S.overview.config); };
+    });
+  }
+  tabs.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.sec === S.cfgSection));
+
+  const section = cfg[S.cfgSection];
+  $("cfg-body").innerHTML = (section.fields || []).map((f) => `
+    <tr>
+      <td class="key">${f.key}</td>
+      <td class="val">${fmtValue(f.value)}</td>
+      <td class="desc">${f.description ? f.description.replace(/\n/g, "<br>") : ""}</td>
+    </tr>`).join("");
+}
+
+// ---------------------------------------------------------------- 下拉选项
+async function refreshOptions() {
+  try {
+    const models = await api("/v1/models");
+    const sel = $("sel-model");
+    const current = S.overview && S.overview.server.model_name;
+    sel.innerHTML = (models.data || []).map((m) => {
+      const name = m.id || m.name;
+      return `<option value="${name}" ${name === current ? "selected" : ""}>${name}</option>`;
+    }).join("") || '<option value="">（models 目录为空）</option>';
+  } catch (_) { /* 离线或鉴权失败时忽略 */ }
+
+  try {
+    const t = await api("/v1/templates");
+    $("sel-template").innerHTML = (t.data || []).map((x) => `<option value="${x}">${x}</option>`).join("")
+      || '<option value="">（templates 目录为空）</option>';
+  } catch (_) { /* ignore */ }
+
+  try {
+    const o = await api("/v1/sampling/overrides");
+    const presets = o.presets || [];
+    const cur = o.selected_preset;
+    $("sel-override").innerHTML =
+      '<option value="">（无预设 / 清除覆盖）</option>' +
+      presets.map((x) => `<option value="${x}" ${x === cur ? "selected" : ""}>${x}</option>`).join("");
+  } catch (_) { /* ignore */ }
+}
+
+// ---------------------------------------------------------------- 操作
+async function cancelJob(id) {
+  try {
+    await api("/dashboard/api/jobs/cancel", { method: "POST", body: JSON.stringify({ request_id: id }) });
+    toast("已请求取消 " + id, "ok");
+    poll();
+  } catch (e) { toast("取消失败：" + e.message, "err"); }
+}
+
+async function resetStats() {
+  try {
+    await api("/dashboard/api/reset", { method: "POST" });
+    toast("统计已清空", "ok");
+    poll();
+  } catch (e) { if (e.message !== "401 未授权") toast("清空失败：" + e.message, "err"); }
+}
+
+async function switchTemplate(unload) {
+  try {
+    const path = unload ? "/v1/template/unload" : "/v1/template/switch";
+    let body;
+    if (!unload) {
+      // /v1/templates 列表返回的是文件名（不含 .jinja），切换接口需要完整文件名
+      let name = $("sel-template").value;
+      if (name && !name.endsWith(".jinja")) name += ".jinja";
+      body = JSON.stringify({ prompt_template_name: name });
+    }
+    await api(path, { method: "POST", body });
+    toast(unload ? "模板已卸载" : "模板已切换", "ok");
+    poll();
+  } catch (e) { if (e.message !== "401 未授权") toast("操作失败：" + e.message, "err"); }
+}
+
+async function switchOverride() {
+  const preset = $("sel-override").value;
+  try {
+    if (preset) await api("/v1/sampling/override/switch", { method: "POST", body: JSON.stringify({ preset }) });
+    else await api("/v1/sampling/override/unload", { method: "POST" });
+    toast(preset ? "已应用预设 " + preset : "已清除采样覆盖", "ok");
+    poll();
+  } catch (e) { if (e.message !== "401 未授权") toast("操作失败：" + e.message, "err"); }
+}
+
+async function unloadModel() {
+  try {
+    await api("/v1/model/unload", { method: "POST" });
+    toast("模型已卸载", "ok");
+    poll();
+  } catch (e) { if (e.message !== "401 未授权") toast("卸载失败：" + e.message, "err"); }
+}
+
+async function loadModel() {
+  const name = $("sel-model").value;
+  if (!name) return toast("请先选择模型", "err");
+  const log = $("loadlog");
+  log.textContent = "";
+  $("btn-load").disabled = true;
+  try {
+    const res = await fetch("/v1/model/load", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers(true) },
+      body: JSON.stringify({ model_name: name }),
+    });
+    if (res.status === 401) { openKeyModal("加载模型需要 admin 密钥"); return; }
+    if (!res.ok) {
+      const t = await res.text();
+      throw new Error(t.slice(0, 200) || res.statusText);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const payload = line.slice(5).trim();
+        if (!payload) continue;
+        try {
+          const ev = JSON.parse(payload);
+          const prog = ev.module != null && ev.modules ? `（${ev.module}/${ev.modules}）` : "";
+          log.textContent += `${ev.model_type || ""} ${ev.status || ""} ${prog}\n`;
+          log.scrollTop = log.scrollHeight;
+          if (ev.status === "finished") toast("模型加载完成", "ok");
+        } catch (_) { /* 忽略半行 */ }
+      }
+    }
+  } catch (e) {
+    toast("加载失败：" + e.message, "err");
+  } finally {
+    $("btn-load").disabled = false;
+    poll();
+    refreshOptions();
+  }
+}
+
+// ---------------------------------------------------------------- 轮询与密钥
+async function poll() {
+  try {
+    const ov = await api("/dashboard/api/overview");
+    if (S.offline) { S.offline = false; }
+    render(ov);
+  } catch (e) {
+    if (e.message === "401 未授权") return;
+    if (!S.offline) {
+      S.offline = true;
+      $("h-dot").className = "dot bad";
+      $("h-status").textContent = "无法连接";
+    }
+  }
+}
+
+function schedule() {
+  if (S.timer) clearInterval(S.timer);
+  const ms = parseInt($("interval").value, 10);
+  if (ms > 0) S.timer = setInterval(() => { poll(); refreshOptionsSlow(); }, ms);
+}
+
+let optionTick = 0;
+function refreshOptionsSlow() {
+  // 下拉列表不需要每次都拉，约每 10 次刷新一次
+  if (++optionTick % 10 === 0) refreshOptions();
+}
+
+function openKeyModal(reason) {
+  $("in-api").value = S.apiKey;
+  $("in-admin").value = S.adminKey;
+  $("key-modal").classList.remove("hidden");
+  if (reason) $("key-modal").querySelector("h2").textContent = reason;
+}
+
+$("btn-key-save").onclick = () => {
+  S.apiKey = $("in-api").value.trim();
+  S.adminKey = $("in-admin").value.trim();
+  localStorage.setItem("tabby.dash.apiKey", S.apiKey);
+  localStorage.setItem("tabby.dash.adminKey", S.adminKey);
+  $("key-modal").classList.add("hidden");
+  poll();
+  refreshOptions();
+};
+
+$("btn-key-cancel").onclick = () => $("key-modal").classList.add("hidden");
+$("btn-keys").onclick = () => openKeyModal("访问密钥");
+$("btn-reset").onclick = resetStats;
+$("btn-template").onclick = () => switchTemplate(false);
+$("btn-template-unload").onclick = () => switchTemplate(true);
+$("btn-override").onclick = switchOverride;
+$("btn-override-unload").onclick = () => { $("sel-override").value = ""; switchOverride(); };
+$("btn-load").onclick = loadModel;
+$("btn-unload").onclick = unloadModel;
+$("interval").onchange = schedule;
+window.addEventListener("resize", () => S.overview && drawChart(S.overview.runtime.series));
+
+// ---------------------------------------------------------------- 启动
+(async function boot() {
+  schedule();
+  await poll();
+  await refreshOptions();
+})();
+</script>
+</body>
+</html>

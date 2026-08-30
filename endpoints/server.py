@@ -13,6 +13,7 @@ from common.tabby_config import config
 from endpoints.Kobold import router as KoboldRouter
 from endpoints.OAI import router as OAIRouter
 from endpoints.core.router import router as CoreRouter
+from endpoints.dashboard.router import router as DashboardRouter
 
 
 def setup_app(host: Optional[str] = None, port: Optional[int] = None):
@@ -64,6 +65,13 @@ def setup_app(host: Optional[str] = None, port: Optional[int] = None):
 
     # Include core API request paths
     app.include_router(CoreRouter)
+
+    # Include the web dashboard
+    if config.network.enable_dashboard:
+        app.include_router(DashboardRouter)
+
+        if host and port:
+            logger.info(f"Dashboard: http://{host}:{port}/dashboard")
 
     return app
 
