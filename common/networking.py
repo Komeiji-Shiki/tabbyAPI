@@ -165,6 +165,32 @@ async def run_with_request_disconnect(
         raise HTTPException(422, disconnect_message) from ex
 
 
+def display_host(host: Optional[str]) -> Optional[str]:
+    """
+    Turn a bind address into an address a user can actually open.
+
+    Wildcard bind addresses (0.0.0.0 or ::) are valid to listen on but
+    useless to click in a browser, so the loopback equivalent is shown
+    instead. The address uvicorn binds to is never changed by this.
+    """
+
+    if not host:
+        return host
+
+    trimmed = host.strip()
+
+    # Normalize a bracketed IPv6 literal like "[::]" before comparing
+    if trimmed.startswith("[") and trimmed.endswith("]"):
+        trimmed = trimmed[1:-1]
+
+    if trimmed == "0.0.0.0":
+        return "127.0.0.1"
+    if trimmed == "::":
+        return "[::1]"
+
+    return host
+
+
 def is_port_in_use(port: int) -> bool:
     """
     Checks if a port is in use

@@ -8,7 +8,7 @@ from typing import Optional
 from common import signals
 from common.logger import UVICORN_LOG_CONFIG
 from common.errors import ContextLengthHTTPException, context_length_exception_handler
-from common.networking import get_global_depends
+from common.networking import display_host, get_global_depends
 from common.tabby_config import config
 from endpoints.Kobold import router as KoboldRouter
 from endpoints.OAI import router as OAIRouter
@@ -18,6 +18,11 @@ from endpoints.dashboard.router import router as DashboardRouter
 
 def setup_app(host: Optional[str] = None, port: Optional[int] = None):
     """Includes the correct routers for startup"""
+
+    # host is only used below to print links, so show a clickable loopback
+    # address when bound to a wildcard like 0.0.0.0. Uvicorn still binds to
+    # the original host passed to start_api().
+    host = display_host(host)
 
     app = FastAPI(
         title="TabbyAPI",
@@ -87,7 +92,7 @@ async def start_api(host: str, port: int):
     """Isolated function to start the API server"""
 
     # TODO: Move OAI API to a separate folder
-    logger.info(f"Developer documentation: http://{host}:{port}/redoc")
+    logger.info(f"Developer documentation: http://{display_host(host)}:{port}/redoc")
 
     # Setup app
     app = setup_app(host, port)
