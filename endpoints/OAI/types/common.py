@@ -6,15 +6,24 @@ from typing import Optional, Union
 from common.sampling import BaseSamplerRequest, get_default_sampler_value
 
 
+class PromptTokensDetails(BaseModel):
+    """OpenAI-compatible prompt token details."""
+
+    cached_tokens: int = 0
+
+
 class UsageStats(BaseModel):
     """Represents usage stats."""
 
     prompt_tokens: int
     prompt_time: Optional[float] = None
     prompt_tokens_per_sec: Optional[Union[float, str]] = None
+    prompt_tokens_details: Optional[PromptTokensDetails] = None
+
     completion_tokens: int
     completion_time: Optional[float] = None
     completion_tokens_per_sec: Optional[Union[float, str]] = None
+
     total_tokens: int
     total_time: Optional[float] = None
 

@@ -1,6 +1,6 @@
 import pathlib
 from common import model
-from endpoints.OAI.types.common import UsageStats
+from endpoints.OAI.types.common import PromptTokensDetails, UsageStats
 from common.tabby_config import config
 from common.auth import get_key_permission
 from common.logger import xlogger
@@ -17,12 +17,18 @@ def get_usage_stats(
     if "finish_reason" not in generation:
         return None
 
-    prompt_tokens = generation.get("prompt_tokens", 0)
-    completion_tokens = generation.get("gen_tokens", 0)
+    prompt_tokens = int(generation.get("prompt_tokens", 0) or 0)
+    completion_tokens = int(generation.get("gen_tokens", 0) or 0)
+
+    # ExLlamaV3 already reports this in the finish chunk.
+    cached_tokens = int(generation.get("cached_tokens", 0) or 0)
+    cached_tokens = max(0, min(cached_tokens, prompt_tokens))
+
     usage_stats = UsageStats(
         prompt_tokens=prompt_tokens,
         prompt_time=generation.get("prompt_time"),
         prompt_tokens_per_sec=generation.get("prompt_tokens_per_sec"),
+        prompt_tokens_details=PromptTokensDetails(cached_tokens=cached_tokens),
         completion_tokens=completion_tokens,
         completion_time=generation.get("gen_time"),
         completion_tokens_per_sec=generation.get("gen_tokens_per_sec"),
@@ -46,10 +52,13 @@ def aggregate_usage_stats(usage_stats_list: list[UsageStats]) -> UsageStats:
     total_tokens = prompt_tokens + completion_tokens
     total_time = prompt_time + completion_time
 
+    prompt_tokens_details = usl[0].prompt_tokens_details or PromptTokensDetails()
+
     usage_stats = UsageStats(
         prompt_tokens=prompt_tokens,
         prompt_time=prompt_time,
         prompt_tokens_per_sec=prompt_tokens_per_sec,
+        prompt_tokens_details=prompt_tokens_details,
         completion_tokens=completion_tokens,
         completion_time=completion_time,
         completion_tokens_per_sec=completion_tokens_per_sec,
