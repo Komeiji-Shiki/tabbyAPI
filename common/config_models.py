@@ -127,6 +127,36 @@ class LoggingConfig(BaseConfigModel):
             "and user-provided content are preserved for bug-report reproduction."
         ),
     )
+    persist_generation_stats: Optional[bool] = Field(
+        True,
+        description=(
+            "Keep the dashboard's generation stats across restarts (default: True).\n"
+            "Every finished generation is appended to a JSONL file and replayed at "
+            "startup, so the recent-generations table and the cumulative totals "
+            "survive a restart. Records contain token counts and timings only, "
+            "never prompts or response text."
+        ),
+    )
+    generation_stats_path: Optional[str] = Field(
+        "logs/gen_stats.jsonl",
+        description=(
+            "File that holds the persisted dashboard stats "
+            "(default: logs/gen_stats.jsonl).\n"
+            "Relative paths are resolved against the TabbyAPI install directory."
+        ),
+    )
+    generation_stats_max_entries: Optional[int] = Field(
+        10000,
+        description=(
+            "How many generation records the persisted file keeps "
+            "(default: 10000).\n"
+            "Once that many new rows are written the file is trimmed back to the "
+            "newest entries, so it cannot grow without bound. 0 disables trimming.\n"
+            "Note that cumulative totals are rebuilt from whatever is still on "
+            "disk, so trimming also shortens how far back the totals reach."
+        ),
+        ge=0,
+    )
 
 
 class ModelConfig(BaseConfigModel):

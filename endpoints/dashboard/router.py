@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from common import metrics, model
 from common.auth import check_admin_key, check_api_key
 from common.config_models import BaseConfigModel
+from common.gen_store import store as stats_store
 from common.health import HealthManager
 from common.logger import xlogger
 from common.tabby_config import config
@@ -130,6 +131,17 @@ async def dashboard_page():
     return HTMLResponse(content=_load_page())
 
 
+def stats_persistence() -> dict:
+    """How far back the numbers on screen reach, and where they came from."""
+
+    return {
+        "persisted": stats_store.enabled,
+        "path": str(stats_store.path),
+        "restored": stats_store.restored,
+        "stored_records": stats_store.stored,
+    }
+
+
 @router.get("/api/overview", dependencies=[Depends(check_api_key)])
 async def dashboard_overview(chart_window: int = metrics.SERIES_WINDOW):
     """
@@ -166,6 +178,7 @@ async def dashboard_overview(chart_window: int = metrics.SERIES_WINDOW):
             "auth_disabled": bool(config.network.disable_auth),
             "api_servers": config.network.api_servers,
         },
+        "stats": stats_persistence(),
         "health": {
             "status": "healthy" if healthy else "unhealthy",
             "issues": issues,
@@ -181,10 +194,15 @@ async def dashboard_overview(chart_window: int = metrics.SERIES_WINDOW):
 
 @router.post("/api/reset", dependencies=[Depends(check_admin_key)])
 async def reset_stats():
-    """Clear all collected dashboard stats."""
+    """Clear all collected dashboard stats, persisted history included."""
 
     metrics.collector.reset()
-    return {"success": True}
+
+    # The on-disk ledger has to go as well. Leaving it behind would resurrect
+    # every number the user just erased the next time the server starts.
+    stats_store.clear()
+
+    return {"success": True, "persisted": stats_store.enabled}
 
 
 @router.post("/api/jobs/cancel", dependencies=[Depends(check_admin_key)])

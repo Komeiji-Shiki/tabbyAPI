@@ -11,7 +11,7 @@ import signal
 from loguru import logger
 from typing import Optional
 
-from common import gen_logging, sampling
+from common import gen_logging, gen_store, sampling
 from common.args import convert_args_to_dict, init_argparser
 from common.auth import load_auth_keys
 from common.actions import run_subcommand
@@ -94,7 +94,12 @@ async def entrypoint_async():
         except FileNotFoundError as e:
             logger.warning(str(e))
 
+    await gen_store.start_from_config()
+
     await start_api(host, port)
+
+    # Let any queued stat writes land while the loop is still alive
+    await gen_store.store.flush()
 
     # Uvicorn has finished serving; unload any loaded models so pending
     # jobs are cancelled and the generator is closed cleanly

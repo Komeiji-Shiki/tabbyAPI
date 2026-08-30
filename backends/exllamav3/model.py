@@ -1429,6 +1429,8 @@ class ExllamaV3Container:
         full_response = ""
         metrics_result = {}
         prefill_reported = False
+        # Why a generation ended without its finish chunk, if that happens
+        abort_reason = None
 
         # Get the generation status once it's ready
         try:
@@ -1523,12 +1525,18 @@ class ExllamaV3Container:
 
                     yield finish_chunk
                     break
+            else:
+                # The job drained without ever reporting eos
+                if not metrics_result:
+                    abort_reason = "incomplete"
 
         except CancelledError:
+            abort_reason = "cancelled"
             if not job.cancelled:
                 await job.cancel()
 
         except Exception as ex:
+            abort_reason = "error"
             # Create a new generator since the current state is broken
             # No need to wait for this to finish
             xlogger.error(
@@ -1548,6 +1556,12 @@ class ExllamaV3Container:
 
             raise ex
         finally:
+            # A generation that never produced a finish chunk - cancelled, client
+            # gone, ended early or failed - still consumed real compute. Record it
+            # from the live counters so it does not silently vanish from the stats.
+            if not metrics_result:
+                collector.record_aborted(request_id, abort_reason or "cancelled")
+
             collector.note_request_finished(request_id)
 
             # Log generation options to console

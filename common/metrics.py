@@ -11,7 +11,7 @@ instead of breaking the endpoint.
 
 import time
 from collections import deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from common.logger import xlogger
 
@@ -62,6 +62,10 @@ class MetricsCollector:
         self.recent: deque = deque(maxlen=RECENT_MAX)
         self._reset_totals()
 
+        # Optional sink so a persistence layer can subscribe to finished records
+        # without this module ever learning about files or IO
+        self.sink: Optional[Callable[[dict], None]] = None
+
         # second-resolution buckets: epoch second -> [generated, prefilled] tokens
         self._buckets: Dict[int, List[float]] = {}
         # request id -> live state of an in-flight generation
@@ -85,6 +89,12 @@ class MetricsCollector:
             "total_time": 0.0,
             "draft_accept": 0,
             "draft_reject": 0,
+            # Aborted generations are counted in full for absolute totals, but
+            # tracked separately so rate metrics can exclude their unknowns.
+            "cancelled_requests": 0,
+            "cancelled_prompt_tokens": 0,
+            "cancelled_gen_tokens": 0,
+            "cancelled_time": 0.0,
         }
 
     # ------------------------------------------------------------------ #
@@ -155,6 +165,48 @@ class MetricsCollector:
 
         self._inflight.pop(request_id, None)
 
+    def record_aborted(self, request_id: str, reason: str = "cancelled") -> bool:
+        """
+        Account for a generation that ended before the backend emitted a finish
+        chunk, which is what happens on cancellation and client disconnects.
+
+        Those requests would otherwise vanish from the stats even though they
+        really burned compute. The backend only reports cache hits and the
+        prefill/queue timings on the final result, so they stay unknown here;
+        rate metrics deliberately exclude these entries rather than treating the
+        unknowns as zero, which would fake a lower hit ratio and a higher TPS.
+
+        Returns False when the request is not (or no longer) tracked.
+        """
+
+        state = self._inflight.pop(request_id, None)
+        if state is None:
+            return False
+
+        elapsed = max(time.time() - state["started"], 0.0)
+
+        entry = {
+            "request_id": request_id,
+            "ts": time.time(),
+            "prompt_tokens": state["prompt_tokens"],
+            "cached_tokens": None,
+            "new_tokens": None,
+            "gen_tokens": state["gen_tokens"],
+            "prompt_tps": None,
+            "gen_tps": None,
+            "prompt_time": None,
+            "gen_time": None,
+            "queue_time": None,
+            "total_time": round(elapsed, 2),
+            "finish_reason": reason,
+            "eos_reason": reason,
+        }
+
+        self.recent.appendleft(entry)
+        self._fold_totals(entry)
+        self._emit(entry)
+        return True
+
     def live_requests(self) -> List[dict]:
         """Per-request live view: exact token counts plus a short-rate estimate."""
 
@@ -187,6 +239,17 @@ class MetricsCollector:
         requests.sort(key=lambda item: item["elapsed"], reverse=True)
         return requests
 
+    def _emit(self, entry: dict):
+        """Hand a finished record to the persistence sink, if one is attached."""
+
+        if self.sink is None:
+            return
+
+        try:
+            self.sink(entry)
+        except Exception as exc:  # monitoring must never break a generation
+            xlogger.debug(f"Metrics sink failed to accept a record: {exc}")
+
     def _current_bucket(self) -> List[float]:
         sec = int(time.time())
         bucket = self._buckets.get(sec)
@@ -205,6 +268,43 @@ class MetricsCollector:
     # ------------------------------------------------------------------ #
     # Completion hook, called from gen_logging.log_metrics               #
     # ------------------------------------------------------------------ #
+
+    def _fold_totals(self, entry: dict):
+        """
+        Fold one record into the cumulative totals. Shared by live recording and
+        by startup replay so the two can never drift apart.
+
+        Aborted records report None for the values the backend only reveals on
+        its finish chunk (cache hits, prefill and queue time). Only the fields
+        that are actually known are folded in, and they are also tracked under
+        cancelled_* so rate metrics can leave them out.
+        """
+
+        totals = self.totals
+        prompt_tokens = _int(entry.get("prompt_tokens"))
+        gen_tokens = _int(entry.get("gen_tokens"))
+        total_time = _num(entry.get("total_time"))
+
+        totals["requests"] += 1
+        totals["prompt_tokens"] += prompt_tokens
+        totals["gen_tokens"] += gen_tokens
+        totals["total_time"] += total_time
+
+        if entry.get("cached_tokens") is None:
+            totals["cancelled_requests"] += 1
+            totals["cancelled_prompt_tokens"] += prompt_tokens
+            totals["cancelled_gen_tokens"] += gen_tokens
+            totals["cancelled_time"] += total_time
+            return
+
+        cached_tokens = _num(entry.get("cached_tokens"))
+        totals["cached_tokens"] += cached_tokens
+        totals["new_prompt_tokens"] += max(prompt_tokens - cached_tokens, 0.0)
+        totals["prompt_time"] += _num(entry.get("prompt_time"))
+        totals["gen_time"] += _num(entry.get("gen_time"))
+        totals["queue_time"] += _num(entry.get("queue_time"))
+        totals["draft_accept"] += _int(entry.get("draft_accept"))
+        totals["draft_reject"] += _int(entry.get("draft_reject"))
 
     def record_generation(self, metrics: dict):
         """Store the final per-request metrics and update cumulative totals."""
@@ -240,19 +340,17 @@ class MetricsCollector:
             entry["draft_reject"] = _int(metrics.get("draft_reject"))
 
         self.recent.appendleft(entry)
+        self._fold_totals(entry)
+        self._emit(entry)
 
-        totals = self.totals
-        totals["requests"] += 1
-        totals["prompt_tokens"] += prompt_tokens
-        totals["cached_tokens"] += cached_tokens
-        totals["new_prompt_tokens"] += new_tokens
-        totals["gen_tokens"] += gen_tokens
-        totals["prompt_time"] += prompt_time
-        totals["gen_time"] += gen_time
-        totals["queue_time"] += queue_time
-        totals["total_time"] += total_time
-        totals["draft_accept"] += _int(metrics.get("draft_accept"))
-        totals["draft_reject"] += _int(metrics.get("draft_reject"))
+    def absorb(self, entry: dict):
+        """
+        Re-adopt a persisted record at startup, keeping its original timestamp.
+        Feed these oldest-first so the newest ends up on top of the table.
+        """
+
+        self.recent.appendleft(dict(entry))
+        self._fold_totals(entry)
 
     def reset(self):
         """Clear all collected stats (uptime is preserved)."""
@@ -334,13 +432,21 @@ class MetricsCollector:
         recent_prompt = 0.0
         recent_cached = 0.0
         for entry in self.recent:
+            # Aborted entries carry no cache data; counting them would drag the
+            # ratio down, so they are skipped on both sides of the division
+            if entry.get("cached_tokens") is None:
+                continue
             recent_prompt += entry["prompt_tokens"]
             recent_cached += entry["cached_tokens"]
+
+        # Cancelled requests contribute real prompt tokens but no cache figure,
+        # so keep them out of the cumulative denominator as well
+        scored_prompt = prompt - totals["cancelled_prompt_tokens"]
 
         return {
             "total_tokens": prompt,
             "cached_tokens": round(cached, 1),
-            "hit_ratio": round(cached / prompt, 4) if prompt > 0 else None,
+            "hit_ratio": round(cached / scored_prompt, 4) if scored_prompt > 0 else None,
             "recent_tokens": round(recent_prompt, 1),
             "recent_cached": round(recent_cached, 1),
             "recent_hit_ratio": (
@@ -362,6 +468,11 @@ class MetricsCollector:
         prefill_time = totals["prompt_time"]
         new_prompt = totals["new_prompt_tokens"]
 
+        # Only completed generations report their timing, so rates must divide
+        # the subset of tokens that actually has a matching time measurement
+        scored_requests = totals["requests"] - totals["cancelled_requests"]
+        scored_gen_tokens = totals["gen_tokens"] - totals["cancelled_gen_tokens"]
+
         draft_total = totals["draft_accept"] + totals["draft_reject"]
 
         return {
@@ -373,12 +484,14 @@ class MetricsCollector:
                 "requests": self.live_requests(),
             },
             "averages": {
-                "gen_tokens_per_sec": round(totals["gen_tokens"] / gen_time, 2) if gen_time > 0 else None,
+                "gen_tokens_per_sec": (
+                    round(scored_gen_tokens / gen_time, 2) if gen_time > 0 else None
+                ),
                 "prefill_tokens_per_sec": (
                     round(new_prompt / prefill_time, 2) if prefill_time > 0 else None
                 ),
-                "queue_time": round(totals["queue_time"] / totals["requests"], 3)
-                if totals["requests"] > 0
+                "queue_time": round(totals["queue_time"] / scored_requests, 3)
+                if scored_requests > 0
                 else None,
                 "draft_accept_ratio": round(totals["draft_accept"] / draft_total, 4)
                 if draft_total > 0
@@ -446,7 +559,18 @@ def backend_snapshot(container: Any) -> dict:
         "cache_mode": None,
         "chunk_size": None,
         "max_batch_size": None,
+        "max_rq_tokens": None,
+        "output_chunking": None,
         "draft_mode": None,
+        "draft_num_tokens": None,
+        "default_draft_size": None,
+        "dynamic_draft": None,
+        "ngram_match_min": None,
+        "draft_cache_mode": None,
+        "draft_model_name": None,
+        "vision": None,
+        "vision_offload": None,
+        "max_position_embeddings": None,
         "active_jobs": 0,
         "pending_jobs": None,
         "queue": None,
@@ -464,10 +588,51 @@ def backend_snapshot(container: Any) -> dict:
     snapshot["max_batch_size"] = getattr(container, "max_batch_size", None)
     snapshot["active_jobs"] = len(getattr(container, "active_job_ids", {}))
 
+    # output_chunking shows up as a bounded request-token budget; when it is
+    # disabled the backend leaves max_rq_tokens unset
+    max_rq_tokens = getattr(container, "max_rq_tokens", None)
+    snapshot["max_rq_tokens"] = max_rq_tokens
+    snapshot["output_chunking"] = max_rq_tokens is not None
+    snapshot["dynamic_draft"] = bool(getattr(container, "dynamic_draft", False))
+    snapshot["ngram_match_min"] = getattr(container, "ngram_match_min", 0)
+    snapshot["vision"] = bool(getattr(container, "use_vision", False))
+
+    model_config = getattr(container, "config", None)
+    infer_params = getattr(model_config, "infer_params", None) if model_config else None
+    if infer_params is not None:
+        snapshot["vision_offload"] = bool(getattr(infer_params, "vision_pinned", False))
+
+    # The checkpoint's own limit, so the dashboard can say how far the context
+    # may still be raised before it stops being a real setting
+    hf_model = getattr(container, "hf_model", None)
+    hf_config = getattr(hf_model, "hf_config", None) if hf_model else None
+    getter = getattr(hf_config, "get_max_position_embeddings", None) if hf_config else None
+    if callable(getter):
+        try:
+            snapshot["max_position_embeddings"] = getter(default=None)
+        except Exception as exc:
+            xlogger.debug(f"Failed to read max_position_embeddings: {exc}")
+
+    # What the backend would use when the draft length is left unset
+    draft_model = getattr(container, "draft_model", None)
+    if draft_model is not None:
+        caps = getattr(draft_model, "caps", None) or {}
+        try:
+            snapshot["default_draft_size"] = caps.get("default_draft_size")
+        except Exception as exc:
+            xlogger.debug(f"Failed to read draft caps: {exc}")
+
     # The backend records the resolved mode, so "mtp" is reported accurately
     # instead of collapsing into the draft-model branch.
     snapshot["draft_mode"] = getattr(container, "draft_mode", None)
     snapshot["draft_num_tokens"] = getattr(container, "draft_num_tokens", None)
+    snapshot["draft_cache_mode"] = getattr(container, "draft_cache_mode", None)
+
+    # Under mtp the draft reuses the main checkpoint, so its directory name is
+    # the main model's name and would only confuse the draft-model field
+    if snapshot["draft_mode"] == "model":
+        draft_dir = getattr(container, "draft_model_dir", None)
+        snapshot["draft_model_name"] = draft_dir.name if draft_dir else None
 
     generator = getattr(container, "generator", None)
     inner = getattr(generator, "generator", None) if generator is not None else None

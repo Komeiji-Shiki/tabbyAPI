@@ -83,6 +83,10 @@ class DraftModelLoadRequest(BaseModel):
         None,
         description="Minimum match length, only used when draft_mode is 'ngram'",
     )
+    draft_cache_mode: Optional[str] = Field(
+        None,
+        description="Cache mode for the draft cache, e.g. FP16, Q8, '8,8'",
+    )
 
 
 class ModelLoadRequest(BaseModel):
@@ -130,8 +134,23 @@ class ModelLoadRequest(BaseModel):
     )
     chunk_size: Optional[int] = None
     output_chunking: Optional[bool] = True
+    max_batch_size: Optional[int] = Field(
+        None,
+        description=(
+            "Concurrent generation jobs. Higher values need more VRAM, and the "
+            "draft cache overhead multiplies with it."
+        ),
+        ge=1,
+    )
     prompt_template: Optional[str] = None
     vision: Optional[bool] = None
+    vision_offload: Optional[bool] = Field(
+        None,
+        description=(
+            "Stream the vision weights from system RAM instead of holding them "
+            "in VRAM. Only applies when vision is enabled."
+        ),
+    )
 
     # Non-config arguments
     draft_model: Optional[DraftModelLoadRequest] = None

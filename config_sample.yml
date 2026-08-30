@@ -61,6 +61,22 @@ logging:
   # and user-provided content are preserved for bug-report reproduction.
   log_chat_completion_requests: false
 
+  # Keep the dashboard's generation stats across restarts (default: True).
+  # Every finished generation is appended to a JSONL file and replayed at boot,
+  # so the recent-generations table and the cumulative totals survive a restart.
+  # The records hold token counts and timings only, never prompts or responses.
+  persist_generation_stats: true
+
+  # File holding the persisted dashboard stats (default: logs/gen_stats.jsonl).
+  # Relative paths are resolved against the TabbyAPI install directory.
+  generation_stats_path: logs/gen_stats.jsonl
+
+  # How many records the file keeps (default: 10000). Once that many new rows
+  # are written it is trimmed back to the newest entries so it cannot grow
+  # without bound; 0 disables trimming. Cumulative totals are rebuilt from
+  # whatever is still on disk, so trimming also shortens how far back they reach.
+  generation_stats_max_entries: 10000
+
 # Options for model overrides and loading
 # Please read the comments to understand how arguments are handled
 # between initial and API loads
