@@ -27,7 +27,8 @@ from endpoints.core.utils.model import get_current_model
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
 DASHBOARD_FILE = pathlib.Path(__file__).parent / "dashboard.html"
-_page_cache: Optional[str] = None
+# (mtime, html) so that editing dashboard.html is picked up without a restart
+_page_cache: Optional[tuple] = None
 
 
 class CancelJobRequest(BaseModel):
@@ -39,10 +40,11 @@ class CancelJobRequest(BaseModel):
 def _load_page() -> str:
     global _page_cache
 
-    if _page_cache is None:
-        _page_cache = DASHBOARD_FILE.read_text(encoding="utf8")
+    mtime = DASHBOARD_FILE.stat().st_mtime
+    if _page_cache is None or _page_cache[0] != mtime:
+        _page_cache = (mtime, DASHBOARD_FILE.read_text(encoding="utf8"))
 
-    return _page_cache
+    return _page_cache[1]
 
 
 def _config_snapshot() -> dict:
@@ -84,11 +86,37 @@ def _config_snapshot() -> dict:
     return sections
 
 
-def _active_jobs(container) -> List[str]:
+def _active_jobs(container) -> List[dict]:
+    """
+    In-flight requests enriched with the live per-request token counters the
+    collector keeps. The backend registers a request id before it has built the
+    matching job, so those entries surface as "queued" instead of pretending to
+    be cancellable generations.
+    """
+
     if container is None:
         return []
 
-    return list(getattr(container, "active_job_ids", {}).keys())
+    live = {item["request_id"]: item for item in metrics.collector.live_requests()}
+    jobs: List[dict] = []
+
+    for request_id, job in getattr(container, "active_job_ids", {}).items():
+        state = live.get(request_id)
+        if state is None:
+            state = {
+                "request_id": request_id,
+                "phase": "queued" if job is None else "generate",
+                "prompt_tokens": 0,
+                "gen_tokens": 0,
+                "prefill_curr": 0,
+                "prefill_max": 0,
+                "elapsed": None,
+                "gen_tokens_per_sec": None,
+            }
+
+        jobs.append(state)
+
+    return jobs
 
 
 @router.get("", include_in_schema=False, response_class=HTMLResponse)
@@ -103,13 +131,16 @@ async def dashboard_page():
 
 
 @router.get("/api/overview", dependencies=[Depends(check_api_key)])
-async def dashboard_overview():
+async def dashboard_overview(chart_window: int = metrics.SERIES_WINDOW):
     """
     Everything the dashboard polls in one call: runtime stats, cache state,
     backend/KV info, system resources, active jobs, health and the config tree.
     """
 
     container = model.container
+
+    # Clamp the requested chart window to the retained bucket span
+    window = min(max(int(chart_window), 1), metrics.BUCKET_RETENTION)
 
     healthy, issues = await HealthManager.is_service_healthy()
 
@@ -139,7 +170,7 @@ async def dashboard_overview():
             "status": "healthy" if healthy else "unhealthy",
             "issues": issues,
         },
-        "runtime": metrics.collector.overview(),
+        "runtime": metrics.collector.overview(window),
         "backend": metrics.backend_snapshot(container),
         "system": metrics.system_snapshot(),
         "jobs": _active_jobs(container),
@@ -164,9 +195,17 @@ async def cancel_job(data: CancelJobRequest):
     if container is None:
         raise HTTPException(503, "No model is currently loaded.")
 
-    job = getattr(container, "active_job_ids", {}).get(data.request_id)
-    if job is None:
+    jobs = getattr(container, "active_job_ids", {})
+    if data.request_id not in jobs:
         raise HTTPException(404, f"No active job with request id {data.request_id}.")
+
+    job = jobs[data.request_id]
+    if job is None:
+        raise HTTPException(
+            409,
+            f"Request {data.request_id} is still queued and has no generation job "
+            "to cancel yet.",
+        )
 
     await job.cancel()
     return {"success": True, "request_id": data.request_id}

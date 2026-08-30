@@ -94,6 +94,8 @@ class ExllamaV3Container:
     # Optional features
     use_draft_model: bool = False
     use_vision: bool = False
+    # Resolved drafting mode (model/mtp/ngram/disabled), reported to the dashboard
+    draft_mode: Optional[str] = None
 
     # HF Model instance
     hf_model: HFModel
@@ -234,6 +236,7 @@ class ExllamaV3Container:
         draft_mode = unwrap(draft_args.get("draft_mode"), "model")
         if draft_mode not in {"model", "disabled", "mtp", "ngram"}:
             raise ValueError(f"Unknown exllamav3 draft mode: {draft_mode}")
+        self.draft_mode = draft_mode
         draft_model_name = draft_args.get("draft_model_name")
         self.use_draft_model = draft_mode == "mtp" or (
             draft_mode == "model" and bool(draft_model_name)
@@ -1419,9 +1422,13 @@ class ExllamaV3Container:
         self.active_job_ids[request_id] = job
         await disconnect_handler.add_cleanup_task(id(job), job.cancel, ())
 
+        # Publish live per-request progress to the dashboard
+        collector.note_request_started(request_id, context_len)
+
         generated_tokens = 0
         full_response = ""
         metrics_result = {}
+        prefill_reported = False
 
         # Get the generation status once it's ready
         try:
@@ -1461,6 +1468,12 @@ class ExllamaV3Container:
 
                 chunk = unwrap(result.get("text"), "")
                 if chunk:
+                    if not prefill_reported:
+                        # First decoded token: prefill is over, so the progress bar
+                        # must stop here instead of hanging at 100% until decode ends
+                        prefill_reported = True
+                        collector.note_prefill_finished(request_id)
+
                     chunk_tokens = result.get("token_ids", self.tokenizer.encode(chunk))
                     full_response += chunk
 
@@ -1479,7 +1492,7 @@ class ExllamaV3Container:
                         token_id_list = list(chunk_tokens)
                         generated_tokens += len(token_id_list)
 
-                    collector.note_generated_tokens(len(token_id_list))
+                    collector.note_stream_tokens(request_id, len(token_id_list))
 
                     # Increase penalty range to generated token amount
                     # TODO:
@@ -1535,7 +1548,7 @@ class ExllamaV3Container:
 
             raise ex
         finally:
-            collector.note_prefill_finished(request_id)
+            collector.note_request_finished(request_id)
 
             # Log generation options to console
             # Some options are too large, so log the args instead

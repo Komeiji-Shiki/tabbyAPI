@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TabbyAPI 监控台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%90%B1%3C/text%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #0d1117;
@@ -131,6 +132,24 @@
   .muted { color: var(--muted); }
   .small { font-size: 12px; }
   .loadlog { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); max-height: 120px; overflow: auto; }
+  .inline-form label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
+  .inline-form label input { width: 92px; }
+  .inline-form label input.narrow { width: 58px; }
+  .job {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 7px 9px; margin-bottom: 7px;
+    background: var(--bg-3); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .job:last-child { margin-bottom: 0; }
+  .job .jid { font-family: Consolas, monospace; font-size: 12px; }
+  .job .metric { font-size: 12px; color: var(--muted); }
+  .job .metric b { color: var(--text); font-weight: 650; font-variant-numeric: tabular-nums; }
+  .job .metric.big b { font-size: 17px; color: var(--accent); }
+  .phase { font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); color: var(--muted); }
+  .phase.prefill { color: var(--purple); border-color: var(--purple); }
+  .phase.generate { color: var(--accent); border-color: var(--accent); }
+  .phase.queued { color: var(--yellow); border-color: var(--yellow); }
+  .empty { color: var(--muted); font-size: 12px; }
 </style>
 </head>
 <body>
@@ -143,7 +162,7 @@
   <span class="small muted" id="h-hint"></span>
   <select id="interval">
     <option value="2000">2 秒刷新</option>
-    <option value="5000">5 秒刷新</option>
+    <option value="5000" selected>5 秒刷新</option>
     <option value="10000">10 秒刷新</option>
     <option value="0">暂停</option>
   </select>
@@ -199,18 +218,24 @@
   <section class="panel">
     <div class="head">
       <span>令牌速率（最近 <span id="chart-window">180</span> 秒）</span>
+      <select id="chart-win" title="图表时间窗口">
+        <option value="30">30 秒</option>
+        <option value="60">60 秒</option>
+        <option value="180" selected>180 秒</option>
+        <option value="600">600 秒</option>
+      </select>
       <span class="grow"></span>
       <span class="legend">
-        <span><i style="background:#4da3ff"></i>生成 T/s</span>
-        <span><i style="background:#bc8cff"></i>预填 T/s</span>
+        <span><i style="background:#4da3ff"></i>生成 T/s（左轴）</span>
+        <span><i style="background:#bc8cff"></i>预填 T/s（右轴）</span>
       </span>
     </div>
     <div class="body"><canvas id="chart"></canvas></div>
   </section>
 
   <section class="panel" id="jobs-panel">
-    <div class="head"><span>正在生成的请求</span><span class="grow"></span><span class="small muted">prefill 进度实时显示</span></div>
-    <div class="body" id="jobs-body"><span class="muted small">当前没有进行中的请求</span></div>
+    <div class="head"><span>正在生成的请求</span><span class="grow"></span><span class="small muted">输出 token 数为实时精确统计</span></div>
+    <div class="body" id="jobs-body"><span class="empty">当前没有进行中的请求</span></div>
   </section>
 
   <div class="grid2">
@@ -250,7 +275,26 @@
           </div>
         </div>
         <div class="row">
-          <div class="t">模型 <span class="small muted" id="run-info"></span></div>
+          <div class="t">运行时参数（需重载模型生效，会中断当前生成）<span class="small muted" id="rt-note"></span></div>
+          <div class="inline-form">
+            <label>上下文长度 <input type="text" id="rt-max-seq" inputmode="numeric"></label>
+            <label>缓存大小 <input type="text" id="rt-cache-size" inputmode="numeric"></label>
+            <label>chunk <input type="text" id="rt-chunk" class="narrow" inputmode="numeric"></label>
+            <label>草稿模式
+              <select id="rt-draft-mode">
+                <option value="model">model（外部草稿模型）</option>
+                <option value="mtp">mtp（模型自带 MTP）</option>
+                <option value="ngram">ngram</option>
+                <option value="disabled">disabled</option>
+              </select>
+            </label>
+            <label>草稿模型 <input type="text" id="rt-draft-name" placeholder="仅 model 模式必填"></label>
+            <label>草稿长 <input type="text" id="rt-draft-tokens" class="narrow" inputmode="numeric"></label>
+            <button id="btn-reload" class="primary">应用并重载模型</button>
+          </div>
+        </div>
+        <div class="row">
+          <div class="t">模型（选好后点「加载模型」即切换，会自动卸载当前模型）<span class="small muted" id="run-info"></span></div>
           <div class="inline-form">
             <select id="sel-model"></select>
             <button id="btn-load" class="primary">加载模型</button>
@@ -309,6 +353,8 @@ const S = {
   offline: false,
   cfgSection: "network",
   loadAbort: null,
+  chartWindow: parseInt(localStorage.getItem("tabby.dash.chartWindow") || "180", 10) || 180,
+  rtDirty: {},
 };
 
 const $ = (id) => document.getElementById(id);
@@ -364,7 +410,8 @@ async function api(path, opts = {}) {
     headers: { "content-type": "application/json", ...headers(true), ...(opts.headers || {}) },
   });
   if (res.status === 401) {
-    openKeyModal("此操作需要有效的密钥");
+    // 密钥框已打开时不再弹窗，免得把主人正在输入的密钥清掉
+    if ($("key-modal").classList.contains("hidden")) openKeyModal("此操作需要有效的密钥");
     throw new Error("401 未授权");
   }
   if (!res.ok) {
@@ -376,7 +423,15 @@ async function api(path, opts = {}) {
 }
 
 // ---------------------------------------------------------------- 图表
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const pow = Math.pow(10, Math.floor(Math.log10(v)));
+  return Math.ceil(v / pow) * pow;
+}
+
 function drawChart(series) {
+  // 本函数内绝不能声明名为 window 的局部变量：函数作用域的 const 声明会遮蔽
+  // 全局 window 对象，使下文的 window.devicePixelRatio 落入暂时性死区而报错。
   const canvas = $("chart");
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
@@ -386,55 +441,74 @@ function drawChart(series) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
+  ctx.font = "11px sans-serif";
 
   if (!series || !series.generated) return;
 
-  const gen = series.generated, pre = series.prefilled;
+  const gen = series.generated;
+  const pre = series.prefilled || [];
   const n = gen.length;
-  const padL = 46, padR = 8, padT = 8, padB = 20;
+  if (n < 2) return;
+
+  const spanSec = series.window || 180;
+  const padL = 46, padR = 52, padT = 8, padB = 20;
   const cw = w - padL - padR, ch = h - padT - padB;
 
-  let max = 1;
-  for (const v of gen) if (v != null && v > max) max = v;
-  for (const v of pre) if (v != null && v > max) max = v;
-  // 上取整到好看的刻度
-  const pow = Math.pow(10, Math.floor(Math.log10(max)));
-  max = Math.ceil(max / pow) * pow;
+  let maxGen = 0, maxPre = 0;
+  for (const v of gen) if (v != null && v > maxGen) maxGen = v;
+  for (const v of pre) if (v != null && v > maxPre) maxPre = v;
+
+  if (maxGen === 0 && maxPre === 0) {
+    ctx.fillStyle = "#8b98a9";
+    ctx.textAlign = "center";
+    ctx.fillText(`最近 ${spanSec} 秒内没有令牌活动`, padL + cw / 2, padT + ch / 2);
+    return;
+  }
+
+  // 生成与预填各用一条纵轴：共用时预填峰值会把生成线压到坐标轴上看不清
+  const scaleGen = niceMax(maxGen);
+  const scalePre = niceMax(maxPre);
+  const steps = 4;
 
   ctx.strokeStyle = "#2d3646";
-  ctx.fillStyle = "#8b98a9";
-  ctx.font = "11px sans-serif";
   ctx.lineWidth = 1;
-  const steps = 4;
   for (let i = 0; i <= steps; i++) {
     const y = padT + ch - (ch * i) / steps;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
-    ctx.textAlign = "right";
-    ctx.fillText(fmt(max * i / steps, max < 10 ? 1 : 0), padL - 6, y + 4);
   }
-  // x 轴时间刻度（-180s ~ 现在）
-  const window = series.window || 180;
+
+  for (let i = 0; i <= steps; i++) {
+    const y = padT + ch - (ch * i) / steps;
+    ctx.fillStyle = "#4da3ff";
+    ctx.textAlign = "right";
+    ctx.fillText(fmt(scaleGen * i / steps, scaleGen < 10 ? 1 : 0), padL - 6, y + 4);
+    ctx.fillStyle = "#bc8cff";
+    ctx.textAlign = "left";
+    ctx.fillText(fmt(scalePre * i / steps, scalePre < 10 ? 1 : 0), w - padR + 6, y + 4);
+  }
+
+  ctx.fillStyle = "#8b98a9";
   for (const mark of [0, 0.25, 0.5, 0.75, 1]) {
     const x = padL + cw * mark;
-    const label = mark === 1 ? "现在" : "-" + Math.round(window * (1 - mark)) + "s";
+    const label = mark === 1 ? "现在" : "-" + Math.round(spanSec * (1 - mark)) + "s";
     ctx.textAlign = mark === 1 ? "right" : "left";
     ctx.fillText(label, x + (mark === 1 ? -2 : 2), h - 6);
   }
 
-  function line(data, color) {
+  function line(data, color, scale) {
     ctx.strokeStyle = color; ctx.lineWidth = 1.6; ctx.beginPath();
     let started = false;
     for (let i = 0; i < n; i++) {
       const v = data[i];
       if (v == null) { started = false; continue; }
       const x = padL + (cw * i) / (n - 1);
-      const y = padT + ch - (ch * Math.min(v / max, 1));
+      const y = padT + ch - (ch * Math.min(v / scale, 1));
       if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
     }
     ctx.stroke();
   }
-  line(pre, "#bc8cff");
-  line(gen, "#4da3ff");
+  line(pre, "#bc8cff", scalePre);
+  line(gen, "#4da3ff", scaleGen);
 }
 
 // ---------------------------------------------------------------- 渲染
@@ -493,9 +567,10 @@ function render(ov) {
   drawChart(rt.series);
   $("chart-window").textContent = (rt.series.window || 180);
 
-  renderJobs(rt, be, ov);
+  renderJobs(ov);
   renderRecent(rt.recent);
   renderConfig(cfg);
+  syncRuntimeInputs(be);
 
   // 运行时参数 + 当前模板高亮
   const mp = (ov.model_info || {}).parameters || {};
@@ -514,22 +589,35 @@ function render(ov) {
   }
 }
 
-function renderJobs(rt, be, ov) {
+function renderJobs(ov) {
   const zone = $("jobs-body");
-  const ids = ov.jobs || [];
-  if (!ids.length) {
-    zone.innerHTML = '<span class="muted small">当前没有进行中的请求</span>';
+  const jobs = ov.jobs || [];
+  if (!jobs.length) {
+    zone.innerHTML = '<span class="empty">当前没有进行中的请求</span>';
     return;
   }
-  const progress = {};
-  for (const p of rt.live.prefill_progress || []) progress[p.request_id] = p;
 
-  const rows = ids.map((id) => {
-    const p = progress[id];
-    const prefill = p ? `<span class="small muted">预填 ${fmt(p.curr)}/${fmt(p.max)}（${pct(p.curr / Math.max(p.max, 1), 0)}）</span>` : "<span class='small muted'>生成中…</span>";
-    const btn = S.adminKey ? `<button class="danger small" data-cancel="${id}">取消</button>` : "";
-    return `<div class="inline-form" style="margin-bottom:6px"><span class="chip">${id}</span>${prefill}${btn}</div>`;
+  const rows = jobs.map((j) => {
+    const phase = j.phase || "generate";
+    const label = phase === "prefill" ? "预填中" : phase === "queued" ? "排队中" : "生成中";
+    let detail;
+    if (phase === "prefill" && j.prefill_max > 0) {
+      detail = `<span class="metric">预填 <b>${fmt(j.prefill_curr)}</b>/${fmt(j.prefill_max)}`
+        + `（${pct(j.prefill_curr / j.prefill_max, 0)}）</span>`;
+    } else {
+      detail = `<span class="metric big">已输出 <b>${fmt(j.gen_tokens)}</b> token</span>`
+        + `<span class="metric">提示词 ${fmt(j.prompt_tokens)} T</span>`;
+    }
+    const tps = j.gen_tokens_per_sec != null
+      ? `<span class="metric">瞬时 <b>${fmt(j.gen_tokens_per_sec, 1)}</b> T/s</span>` : "";
+    const spent = j.elapsed != null ? `<span class="metric">已用 ${fmt(j.elapsed, 1)}s</span>` : "";
+    const btn = (S.adminKey && phase !== "queued")
+      ? `<button class="danger small" data-cancel="${j.request_id}">取消</button>` : "";
+    return `<div class="job"><span class="phase ${phase}">${label}</span>`
+      + `<span class="jid chip">${j.request_id}</span>${detail}${tps}${spent}`
+      + `<span style="flex:1"></span>${btn}</div>`;
   });
+
   zone.innerHTML = rows.join("");
   zone.querySelectorAll("button[data-cancel]").forEach((b) => {
     b.onclick = () => cancelJob(b.dataset.cancel);
@@ -663,19 +751,25 @@ async function unloadModel() {
 async function loadModel() {
   const name = $("sel-model").value;
   if (!name) return toast("请先选择模型", "err");
+  await streamLoad({ model_name: name });
+}
+
+// 重载模型并跟踪 SSE 进度（加载与带参数重载共用这一条链路）
+async function streamLoad(body) {
   const log = $("loadlog");
   log.textContent = "";
   $("btn-load").disabled = true;
+  $("btn-reload").disabled = true;
   try {
     const res = await fetch("/v1/model/load", {
       method: "POST",
       headers: { "content-type": "application/json", ...headers(true) },
-      body: JSON.stringify({ model_name: name }),
+      body: JSON.stringify(body),
     });
     if (res.status === 401) { openKeyModal("加载模型需要 admin 密钥"); return; }
     if (!res.ok) {
       const t = await res.text();
-      throw new Error(t.slice(0, 200) || res.statusText);
+      throw new Error(t.slice(0, 300) || res.statusText);
     }
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -703,15 +797,79 @@ async function loadModel() {
     toast("加载失败：" + e.message, "err");
   } finally {
     $("btn-load").disabled = false;
+    $("btn-reload").disabled = false;
     poll();
     refreshOptions();
   }
 }
 
+// ---------------------------------------------------------------- 运行时参数
+const RT_FIELDS = {
+  "rt-max-seq": "max_seq_len",
+  "rt-cache-size": "cache_size",
+  "rt-chunk": "chunk_size",
+  "rt-draft-mode": "draft_mode",
+  "rt-draft-tokens": "draft_num_tokens",
+};
+
+function syncRuntimeInputs(be) {
+  for (const [id, key] of Object.entries(RT_FIELDS)) {
+    const el = $(id);
+    // 主人正在编辑的值不能被轮询回来，也不动获得焦点的输入框
+    if (S.rtDirty[id] || document.activeElement === el) continue;
+    let v = be[key];
+    if (key === "draft_mode" && !v) v = "disabled";
+    if (v === undefined || v === null) v = "";
+    if (String(el.value) !== String(v)) el.value = v;
+  }
+  const cfgDraft = ((S.overview || {}).config || {}).draft_model || {};
+  const cfgMode = (cfgDraft.fields || []).find((f) => f.key === "draft_mode");
+  $("rt-note").textContent = be.draft_mode
+    ? `· 运行时 ${be.draft_mode}，config.yml 为 ${cfgMode && cfgMode.value ? cfgMode.value : "default"}`
+    : "";
+}
+
+async function reloadWithRuntime() {
+  const ov = S.overview;
+  if (!ov) return toast("还没有拿到服务器数据", "err");
+  const name = ov.server.model_name;
+  if (!name) return toast("当前没有已加载的模型，请先用下方「加载模型」", "err");
+
+  const seq = parseInt($("rt-max-seq").value, 10);
+  const cache = parseInt($("rt-cache-size").value, 10);
+  const chunk = parseInt($("rt-chunk").value, 10);
+  const mode = $("rt-draft-mode").value;
+  const draftTokens = parseInt($("rt-draft-tokens").value, 10);
+
+  if (!(seq > 0)) return toast("上下文长度必须是正整数", "err");
+  if (!(cache > 0) || cache % 256 !== 0) return toast("缓存大小必须是 256 的正整数倍", "err");
+  if (cache < seq) return toast("缓存大小不能小于上下文长度", "err");
+  if (!(chunk > 0)) return toast("chunk 大小必须是正整数", "err");
+
+  const draft = { draft_mode: mode };
+  if (mode === "model") {
+    const dn = $("rt-draft-name").value.trim();
+    if (!dn) return toast("model 模式必须填写草稿模型名", "err");
+    draft.draft_model_name = dn;
+  }
+  if (draftTokens > 0) draft.draft_num_tokens = draftTokens;
+
+  await streamLoad({
+    model_name: name,
+    max_seq_len: seq,
+    cache_size: cache,
+    chunk_size: chunk,
+    draft_model: draft,
+  });
+  S.rtDirty = {};
+}
+
 // ---------------------------------------------------------------- 轮询与密钥
 async function poll() {
+  // 密钥框打开期间暂停轮询，避免 401 反复重置正在输入的密钥
+  if (!$("key-modal").classList.contains("hidden")) return;
   try {
-    const ov = await api("/dashboard/api/overview");
+    const ov = await api("/dashboard/api/overview?chart_window=" + S.chartWindow);
     if (S.offline) { S.offline = false; }
     render(ov);
   } catch (e) {
@@ -732,6 +890,8 @@ function schedule() {
 
 let optionTick = 0;
 function refreshOptionsSlow() {
+  // 密钥框打开期间同样暂停，避免多余的鉴权请求打断输入
+  if (!$("key-modal").classList.contains("hidden")) return;
   // 下拉列表不需要每次都拉，约每 10 次刷新一次
   if (++optionTick % 10 === 0) refreshOptions();
 }
@@ -762,11 +922,21 @@ $("btn-override").onclick = switchOverride;
 $("btn-override-unload").onclick = () => { $("sel-override").value = ""; switchOverride(); };
 $("btn-load").onclick = loadModel;
 $("btn-unload").onclick = unloadModel;
+$("btn-reload").onclick = reloadWithRuntime;
+$("chart-win").onchange = (e) => {
+  S.chartWindow = parseInt(e.target.value, 10) || 180;
+  localStorage.setItem("tabby.dash.chartWindow", String(S.chartWindow));
+  poll();
+};
+Object.keys(RT_FIELDS).concat(["rt-draft-name"]).forEach((id) => {
+  $(id).addEventListener("input", () => { S.rtDirty[id] = true; });
+});
 $("interval").onchange = schedule;
 window.addEventListener("resize", () => S.overview && drawChart(S.overview.runtime.series));
 
 // ---------------------------------------------------------------- 启动
 (async function boot() {
+  $("chart-win").value = String(S.chartWindow);
   schedule();
   await poll();
   await refreshOptions();

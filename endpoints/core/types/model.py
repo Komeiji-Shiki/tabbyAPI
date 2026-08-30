@@ -49,8 +49,16 @@ class ModelList(BaseModel):
 class DraftModelLoadRequest(BaseModel):
     """Represents a draft model load request."""
 
-    # Required
-    draft_model_name: str
+    # Drafting mode. Only "model" needs draft_model_name; mtp reuses the main
+    # model's MTP component, and ngram/disabled need no model at all.
+    draft_mode: Optional[Literal["model", "disabled", "mtp", "ngram"]] = Field(
+        None,
+        description="Options: model, disabled, mtp, ngram",
+    )
+    draft_model_name: Optional[str] = Field(
+        None,
+        description="Required only when draft_mode is 'model'",
+    )
 
     # Config arguments
     draft_rope_scale: Optional[float] = None
@@ -62,6 +70,18 @@ class DraftModelLoadRequest(BaseModel):
     draft_gpu_split: Optional[List[float]] = Field(
         default_factory=list,
         examples=[[24.0, 20.0]],
+    )
+    draft_num_tokens: Optional[int] = Field(
+        None,
+        description="Number of tokens to draft per iteration",
+    )
+    dynamic_draft: Optional[bool] = Field(
+        None,
+        description="Adjust the draft length from observed acceptance rates",
+    )
+    ngram_match_min: Optional[int] = Field(
+        None,
+        description="Minimum match length, only used when draft_mode is 'ngram'",
     )
 
 

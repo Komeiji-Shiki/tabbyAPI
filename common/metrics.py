@@ -28,6 +28,10 @@ BUCKET_RETENTION = 300
 RECENT_MAX = 100
 # Window used for the "live" TPS readouts, in seconds
 LIVE_WINDOW = 5.0
+# Per-request token-rate window used by the live in-flight readouts, in seconds
+TPS_WINDOW = 5.0
+# Chart windows offered by the dashboard, in seconds
+SERIES_WINDOWS = (30, 60, 180, 600)
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -60,8 +64,8 @@ class MetricsCollector:
 
         # second-resolution buckets: epoch second -> [generated, prefilled] tokens
         self._buckets: Dict[int, List[float]] = {}
-        # request id -> [curr_progress, max_progress] for in-flight prefills
-        self._prefill: Dict[str, List[int]] = {}
+        # request id -> live state of an in-flight generation
+        self._inflight: Dict[str, Dict[str, Any]] = {}
 
         self._process: Optional[Any] = None
         if psutil is not None:
@@ -87,29 +91,101 @@ class MetricsCollector:
     # Live hooks, called from the generation loop                        #
     # ------------------------------------------------------------------ #
 
-    def note_generated_tokens(self, count: int):
-        """Attribute streamed tokens to the current one-second bucket."""
+    def note_request_started(self, request_id: str, prompt_tokens: int = 0):
+        """Register an in-flight request so the dashboard can track it live."""
 
-        if count > 0:
-            self._current_bucket()[0] += count
+        self._inflight[request_id] = {
+            "request_id": request_id,
+            "prompt_tokens": _int(prompt_tokens),
+            "gen_tokens": 0,
+            "prefill_curr": 0,
+            "prefill_max": 0,
+            "prefill_done": False,
+            "started": time.time(),
+            # (timestamp, cumulative tokens) samples bounding the rate window
+            "samples": deque(),
+        }
+
+    def note_stream_tokens(self, request_id: str, count: int):
+        """Attribute streamed tokens to the one-second bucket and their request."""
+
+        if count <= 0:
+            return
+
+        self._current_bucket()[0] += count
+
+        state = self._inflight.get(request_id)
+        if state is None:
+            return
+
+        state["gen_tokens"] += count
+        now = time.time()
+        samples: deque = state["samples"]
+        samples.append((now, state["gen_tokens"]))
+        while samples and now - samples[0][0] > TPS_WINDOW:
+            samples.popleft()
 
     def note_prefill_progress(self, request_id: str, curr: int, maximum: int):
         """Track chunk-by-chunk prefill progress reported by the backend."""
 
-        state = self._prefill.get(request_id)
+        state = self._inflight.get(request_id)
         if state is None:
-            state = [0, 0]
-            self._prefill[request_id] = state
+            return
 
-        delta = curr - state[0]
-        state[0] = curr
-        state[1] = maximum
+        delta = curr - state["prefill_curr"]
+        state["prefill_curr"] = curr
+        state["prefill_max"] = maximum
 
         if delta > 0:
             self._current_bucket()[1] += delta
 
     def note_prefill_finished(self, request_id: str):
-        self._prefill.pop(request_id, None)
+        """Mark prefill complete. The request stays in flight while it decodes."""
+
+        state = self._inflight.get(request_id)
+        if state is None:
+            return
+
+        state["prefill_done"] = True
+        if state["prefill_max"]:
+            state["prefill_curr"] = state["prefill_max"]
+
+    def note_request_finished(self, request_id: str):
+        """Drop a request from the in-flight table once it is fully done."""
+
+        self._inflight.pop(request_id, None)
+
+    def live_requests(self) -> List[dict]:
+        """Per-request live view: exact token counts plus a short-rate estimate."""
+
+        now = time.time()
+        requests: List[dict] = []
+
+        for state in self._inflight.values():
+            samples: deque = state["samples"]
+            tps = None
+            if len(samples) >= 2:
+                first_ts, first_count = samples[0]
+                last_ts, last_count = samples[-1]
+                span = last_ts - first_ts
+                if span > 0.2:
+                    tps = round((last_count - first_count) / span, 2)
+
+            requests.append(
+                {
+                    "request_id": state["request_id"],
+                    "prompt_tokens": state["prompt_tokens"],
+                    "gen_tokens": state["gen_tokens"],
+                    "phase": "prefill" if not state["prefill_done"] else "generate",
+                    "prefill_curr": state["prefill_curr"],
+                    "prefill_max": state["prefill_max"],
+                    "elapsed": round(now - state["started"], 2),
+                    "gen_tokens_per_sec": tps,
+                }
+            )
+
+        requests.sort(key=lambda item: item["elapsed"], reverse=True)
+        return requests
 
     def _current_bucket(self) -> List[float]:
         sec = int(time.time())
@@ -183,7 +259,7 @@ class MetricsCollector:
 
         self.recent.clear()
         self._buckets.clear()
-        self._prefill.clear()
+        self._inflight.clear()
         self._reset_totals()
 
     # ------------------------------------------------------------------ #
@@ -206,12 +282,13 @@ class MetricsCollector:
         span = max(min(seconds, now - self.started_at), 1e-3)
         return gen / span, prefill / span
 
-    def series(self) -> dict:
+    def series(self, window: int = SERIES_WINDOW) -> dict:
         """One-second token-rate buckets for the live chart."""
 
+        window = max(int(window), 1)
         now = time.time()
         last_sec = int(now)
-        first_sec = last_sec - SERIES_WINDOW + 1
+        first_sec = last_sec - window + 1
 
         gen_series: List[Optional[float]] = []
         prefill_series: List[Optional[float]] = []
@@ -241,7 +318,8 @@ class MetricsCollector:
 
         return {
             "seconds_per_point": 1,
-            "window": SERIES_WINDOW,
+            "window": window,
+            "windows": list(SERIES_WINDOWS),
             "generated": gen_series,
             "prefilled": prefill_series,
         }
@@ -270,7 +348,7 @@ class MetricsCollector:
             ),
         }
 
-    def overview(self) -> dict:
+    def overview(self, chart_window: int = SERIES_WINDOW) -> dict:
         """Everything the dashboard needs from the collector itself."""
 
         now = time.time()
@@ -292,11 +370,7 @@ class MetricsCollector:
             "live": {
                 "gen_tokens_per_sec": round(live_gen, 2),
                 "prefill_tokens_per_sec": round(live_prefill, 2),
-                "prefill_progress": [
-                    {"request_id": rid, "curr": state[0], "max": state[1]}
-                    for rid, state in self._prefill.items()
-                    if state[1] > 0
-                ],
+                "requests": self.live_requests(),
             },
             "averages": {
                 "gen_tokens_per_sec": round(totals["gen_tokens"] / gen_time, 2) if gen_time > 0 else None,
@@ -311,7 +385,7 @@ class MetricsCollector:
                 else None,
             },
             "cache": self.cache_hit_stats(),
-            "series": self.series(),
+            "series": self.series(chart_window),
             "recent": [dict(entry) for entry in list(self.recent)[:30]],
         }
 
@@ -390,10 +464,10 @@ def backend_snapshot(container: Any) -> dict:
     snapshot["max_batch_size"] = getattr(container, "max_batch_size", None)
     snapshot["active_jobs"] = len(getattr(container, "active_job_ids", {}))
 
-    if getattr(container, "use_draft_model", False):
-        snapshot["draft_mode"] = "model"
-    elif getattr(container, "ngram_match_min", 0):
-        snapshot["draft_mode"] = "ngram"
+    # The backend records the resolved mode, so "mtp" is reported accurately
+    # instead of collapsing into the draft-model branch.
+    snapshot["draft_mode"] = getattr(container, "draft_mode", None)
+    snapshot["draft_num_tokens"] = getattr(container, "draft_num_tokens", None)
 
     generator = getattr(container, "generator", None)
     inner = getattr(generator, "generator", None) if generator is not None else None
