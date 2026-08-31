@@ -1,4 +1,4 @@
-from pydantic import AliasChoices, BaseModel, Field, field_validator
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from time import time
 from typing import Literal, Union, List, Optional, Dict
 from uuid import uuid4
@@ -28,10 +28,26 @@ class ChatCompletionImageUrl(BaseModel):
     url: str
 
 
+class ChatCompletionVideoUrl(BaseModel):
+    url: str
+    fps: Optional[float] = Field(default=None, gt=0, le=60)
+    num_frames: Optional[int] = Field(default=None, ge=1, le=768)
+    max_frames: int = Field(default=64, ge=1, le=768)
+
+    @model_validator(mode="after")
+    def validate_sampling_options(self):
+        if self.fps is not None and self.num_frames is not None:
+            raise ValueError("Only one of fps and num_frames can be specified")
+        if self.num_frames is not None and self.num_frames > self.max_frames:
+            raise ValueError("num_frames cannot exceed max_frames")
+        return self
+
+
 class ChatCompletionMessagePart(BaseModel):
-    type: Literal["text", "image_url"] = "text"
+    type: Literal["text", "image_url", "video_url"] = "text"
     text: Optional[str] = None
     image_url: Optional[ChatCompletionImageUrl] = None
+    video_url: Optional[ChatCompletionVideoUrl] = None
 
 
 class ChatCompletionMessage(BaseModel):

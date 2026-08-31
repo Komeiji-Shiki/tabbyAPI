@@ -306,10 +306,29 @@ async def format_messages_with_template(
             concatenated_content = ""
             for content in message.content:
                 if content.type == "text":
-                    concatenated_content += content.text
-                elif content.type == "image_url" and mm_embeddings:
+                    concatenated_content += content.text or ""
+                elif content.type == "image_url":
+                    if mm_embeddings is None:
+                        raise HTTPException(400, "Vision input is disabled for the loaded model.")
+                    if content.image_url is None:
+                        raise HTTPException(422, "image_url content requires an image_url object.")
+                    alias_start = len(mm_embeddings.text_alias)
                     await mm_embeddings.add(model.container, content.image_url.url)
-                    concatenated_content += mm_embeddings.text_alias[-1]
+                    concatenated_content += "".join(mm_embeddings.text_alias[alias_start:])
+                elif content.type == "video_url":
+                    if mm_embeddings is None:
+                        raise HTTPException(400, "Vision input is disabled for the loaded model.")
+                    if content.video_url is None:
+                        raise HTTPException(422, "video_url content requires a video_url object.")
+                    alias_start = len(mm_embeddings.text_alias)
+                    await mm_embeddings.add_video(
+                        model.container,
+                        content.video_url.url,
+                        fps=content.video_url.fps,
+                        num_frames=content.video_url.num_frames,
+                        max_frames=content.video_url.max_frames,
+                    )
+                    concatenated_content += "".join(mm_embeddings.text_alias[alias_start:])
 
             # Convert the message content into a concatenated string
             message.content = concatenated_content
