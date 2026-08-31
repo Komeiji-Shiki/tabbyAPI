@@ -165,6 +165,52 @@ class ModelLoadCleanupTests(unittest.IsolatedAsyncioTestCase):
             {"draft_model_dir"},
         )
 
+    async def test_load_defaults_keep_reasoning_config_without_use_as_default(self):
+        configured_values = {
+            "reasoning": True,
+            "reasoning_start_token": "<think>",
+            "reasoning_end_token": "</think>",
+            "start_in_reasoning": "always",
+            "tool_calls_in_reasoning": False,
+            "reasoning_budget_tokens": 128,
+            "reasoning_budget_message": "finish thinking",
+            "template_vars_default": {"enable_thinking": True},
+            "template_vars_force": {"enable_thinking": True},
+            "force_enable_thinking": False,
+            "tool_format": "qwen3",
+            "harmony": False,
+            "muse_glimmer": False,
+            "vision": True,
+            "vision_offload": True,
+            "unrelated_runtime_setting": "must not leak",
+        }
+        model_config = SimpleNamespace(
+            use_as_default=[],
+            model_dump=Mock(return_value=configured_values),
+        )
+        fake_config = SimpleNamespace(
+            model=model_config,
+            model_defaults={"max_seq_len": 8192},
+            draft_model_defaults={"draft_mode": "disabled"},
+        )
+
+        with patch.object(model, "config", fake_config):
+            resolved = await model.apply_load_defaults(pathlib.Path("__missing_model__"))
+
+        for key, value in configured_values.items():
+            if key != "unrelated_runtime_setting":
+                self.assertEqual(resolved[key], value)
+        self.assertNotIn("unrelated_runtime_setting", resolved)
+        self.assertEqual(resolved["max_seq_len"], 8192)
+        self.assertEqual(resolved["draft_model"], {"draft_mode": "disabled"})
+
+        with patch.object(model, "config", fake_config):
+            overridden = await model.apply_load_defaults(
+                pathlib.Path("__missing_model__"),
+                reasoning=False,
+            )
+        self.assertFalse(overridden["reasoning"])
+
 
 if __name__ == "__main__":
     unittest.main()

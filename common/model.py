@@ -65,6 +65,30 @@ class ModelType(Enum):
     VISION = "vision"
 
 
+# These settings affect how generated text is parsed after a model reload.
+# They must follow the live model config even when a UI load request only sends
+# hardware/runtime settings and does not list them in `use_as_default`.
+REASONING_FIELDS = frozenset(
+    {
+        "reasoning",
+        "reasoning_start_token",
+        "reasoning_end_token",
+        "start_in_reasoning",
+        "tool_calls_in_reasoning",
+        "reasoning_budget_tokens",
+        "reasoning_budget_message",
+        "template_vars_default",
+        "template_vars_force",
+        "force_enable_thinking",
+        "tool_format",
+        "harmony",
+        "muse_glimmer",
+        "vision",
+        "vision_offload",
+    }
+)
+
+
 def load_progress(module, modules):
     """Wrapper callback for load progress."""
     yield module, modules
@@ -130,9 +154,18 @@ async def apply_load_defaults(model_path: pathlib.Path, **kwargs):
 
             xlogger.info(f"Applying model overrides from {override_config_path}")
 
-    # use_as_default keys
+    # use_as_default keys plus parser settings that must survive UI reloads.
+    # The cached model_defaults only contains use_as_default keys, so read the
+    # live Pydantic model for the reasoning-related fields as well.
+    model_default_fields = set(config.model.use_as_default) | REASONING_FIELDS
+    configured_model_defaults = {
+        key: value
+        for key, value in config.model.model_dump().items()
+        if key in model_default_fields
+    }
     defaults = {
         **config.model_defaults,
+        **configured_model_defaults,
         "draft_model": {**config.draft_model_defaults},
     }
 
