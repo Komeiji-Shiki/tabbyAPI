@@ -59,12 +59,12 @@ def get_toolcall_tags(tool_format: str):
     return parser.TOOLCALL_START, parser.TOOLCALL_END
 
 
-def get_stream_toolcall_parser(tool_format: str):
+def get_stream_toolcall_parser(tool_format: str, tools=None):
     """Return a format-specific incremental parser when one is available."""
 
     parser = _get_parser(tool_format)
     parser_type = getattr(parser, "StreamToolCallParser", None) if parser else None
-    return parser_type() if parser_type else None
+    return parser_type(tools=tools) if parser_type else None
 
 
 def is_supported_format(tool_format: str) -> bool:

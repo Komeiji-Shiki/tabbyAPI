@@ -648,7 +648,8 @@ async def _chat_stream_collector(
         t_tool_start, t_tool_end = get_toolcall_tags(tool_format)
         use_tool = params.tool_choice != "none" and bool(t_tool_start)
         if streaming_mode and use_tool:
-            stream_tool_parser = get_stream_toolcall_parser(tool_format)
+            stream_tools = [*(params.tools or []), *(params.functions or [])]
+            stream_tool_parser = get_stream_toolcall_parser(tool_format, stream_tools)
 
         use_think = mc.reasoning and bool(mc.reasoning_start_token)
 

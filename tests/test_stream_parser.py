@@ -151,6 +151,24 @@ class TagStreamParserTests(unittest.TestCase):
 
 
 class QwenToolCallStreamParserTests(unittest.TestCase):
+    @staticmethod
+    def tool_schema(**properties):
+        from endpoints.OAI.types.tools import ToolSpec
+
+        return [
+            ToolSpec.model_validate({
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write content",
+                    "parameters": {
+                        "type": "object",
+                        "properties": properties,
+                    },
+                },
+            })
+        ]
+
     def test_emits_function_and_argument_deltas_incrementally(self):
         from endpoints.OAI.utils.toolcall_formats.qwen3_coder import StreamToolCallParser
 
@@ -178,6 +196,73 @@ class QwenToolCallStreamParserTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(arguments), {"city": "Tokyo", "units": "metric"})
         self.assertTrue(parser.has_tool_calls)
+
+    def test_streams_string_value_before_parameter_closes(self):
+        from endpoints.OAI.utils.toolcall_formats.qwen3_coder import StreamToolCallParser
+
+        parser = StreamToolCallParser(tools=self.tool_schema(content={"type": "string"}))
+        deltas = parser.feed(
+            "<tool_call><function=write_file><parameter=content>\n"
+        )
+        self.assertEqual(deltas[-1]["function"]["arguments"], '{"content":"')
+
+        body_deltas = parser.feed('line one\n"quoted" text')
+        self.assertTrue(body_deltas)
+        self.assertIn("line one", body_deltas[0]["function"]["arguments"])
+
+        deltas.extend(body_deltas)
+        deltas.extend(parser.feed("\n</parameter></function></tool_call>"))
+        arguments = "".join(
+            delta.get("function", {}).get("arguments", "") for delta in deltas
+        )
+        self.assertEqual(json.loads(arguments), {"content": 'line one\n"quoted" text'})
+        self.assertTrue(parser.has_tool_calls)
+
+    def test_streams_object_value_as_raw_json(self):
+        from endpoints.OAI.utils.toolcall_formats.qwen3_coder import StreamToolCallParser
+
+        parser = StreamToolCallParser(tools=self.tool_schema(options={"type": "object"}))
+        deltas = parser.feed(
+            "<tool_call><function=write_file><parameter=options>{\"nested\":"
+        )
+        self.assertTrue(any('"nested"' in d["function"]["arguments"] for d in deltas))
+
+        deltas.extend(parser.feed("{\"enabled\":true}}</parameter></function></tool_call>"))
+        arguments = "".join(
+            delta.get("function", {}).get("arguments", "") for delta in deltas
+        )
+        self.assertEqual(
+            json.loads(arguments),
+            {"options": {"nested": {"enabled": True}}},
+        )
+
+    def test_streams_nullable_string_schema_before_parameter_closes(self):
+        from endpoints.OAI.utils.toolcall_formats.qwen3_coder import StreamToolCallParser
+
+        parser = StreamToolCallParser(
+            tools=self.tool_schema(
+                content={
+                    "anyOf": [
+                        {"type": "string"},
+                        {"type": "null"},
+                    ]
+                }
+            )
+        )
+        deltas = parser.feed(
+            "<tool_call><function=write_file><parameter=content>partial"
+        )
+
+        arguments = "".join(
+            delta.get("function", {}).get("arguments", "") for delta in deltas
+        )
+        self.assertEqual(arguments, '{"content":"partial')
+
+        deltas.extend(parser.feed(" value</parameter></function></tool_call>"))
+        arguments = "".join(
+            delta.get("function", {}).get("arguments", "") for delta in deltas
+        )
+        self.assertEqual(json.loads(arguments), {"content": "partial value"})
 
 
 class HarmonyStreamParserTests(unittest.TestCase):
