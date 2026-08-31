@@ -78,6 +78,9 @@ class LogicalGenerationMetricsTests(unittest.TestCase):
 
         self.assertEqual(stats["prompt_tokens"], 1586)
         self.assertEqual(stats["cached_tokens"], 772)
+        self.assertEqual(stats["cache_scope"], "initial_request")
+        self.assertEqual(stats["initial_cached_tokens"], 772)
+        self.assertEqual(stats["initial_uncached_tokens"], 814)
         self.assertEqual(stats["prefill_tokens"], 1586)
         self.assertEqual(stats["gen_tokens"], 1112)
         self.assertEqual(stats["prompt_tokens_per_sec"], 793.0)
@@ -147,6 +150,8 @@ class LogicalGenerationMetricsTests(unittest.TestCase):
         stats = tracker.abort(job, "queued", "cancelled", "")
 
         self.assertIsNone(stats["cached_tokens"])
+        self.assertIsNone(stats["initial_cached_tokens"])
+        self.assertIsNone(stats["initial_uncached_tokens"])
         self.assertEqual(stats["prefill_tokens"], 0)
         self.assertEqual(stats["prompt_tokens_per_sec"], "Indeterminate")
         self.assertEqual(stats["queue_time"], 1.0)

@@ -1,4 +1,5 @@
 import pathlib
+import threading
 from inspect import getdoc
 from os import getenv
 from textwrap import dedent
@@ -14,6 +15,7 @@ from common.config_models import BaseConfigModel, TabbyConfigModel
 from common.utils import deep_merge_dicts, filter_none_values, unwrap
 
 yaml = YAML(typ=["rt", "safe"])
+_yaml_lock = threading.Lock()
 
 
 class TabbyConfig(TabbyConfigModel):
@@ -82,9 +84,12 @@ class TabbyConfig(TabbyConfigModel):
 
                 # Logging config migration
                 # This will catch the majority of legacy config files
+                # Note: Do NOT just check for missing log_ prefix, because new fields like
+                # persist_generation_stats do not have it.
                 logging_cfg = unwrap(cfg.get("logging"), {})
+                legacy_log_keys = ["prompt", "generation_params", "requests"]
                 unmigrated_log_keys = [
-                    key for key in logging_cfg.keys() if not key.startswith("log_")
+                    key for key in logging_cfg.keys() if key in legacy_log_keys
                 ]
                 if unmigrated_log_keys:
                     legacy = True
@@ -106,7 +111,11 @@ class TabbyConfig(TabbyConfigModel):
             new_cfg = TabbyConfigModel.model_validate(cfg)
 
             try:
-                config_path.rename(f"{config_path}.bak")
+                backup_path = pathlib.Path(f"{config_path}.bak")
+                # If backup exists, we must delete it first on Windows to avoid WinError 183
+                if backup_path.exists():
+                    backup_path.unlink()
+                config_path.rename(backup_path)
                 generate_config_file(model=new_cfg, filename=config_path)
                 logger.info(
                     "Auto-migration successful. "
@@ -167,6 +176,77 @@ class TabbyConfig(TabbyConfigModel):
 
 # Create an empty instance of the config class
 config: TabbyConfig = TabbyConfig()
+
+
+def _merge_recursive(target, source):
+    """Recursively merge source dict into target (ruamel CommentedMap)."""
+    for key, value in source.items():
+        if isinstance(value, dict) and (key in target and isinstance(target[key], dict)):
+            _merge_recursive(target[key], value)
+        else:
+            target[key] = value
+
+
+def update_config_file_and_memory(new_values: dict):
+    """
+    Update config.yml and the in-memory config object.
+
+    Preserves YAML comments by loading as round-trip, applying a recursive
+    merge, and dumping back to disk. Then syncs the active `config` singleton
+    to reflect the new values without needing a full reload.
+    """
+    config_path = pathlib.Path("config.yml")
+    with _yaml_lock:
+        try:
+            if not config_path.exists():
+                raise FileNotFoundError(f"{config_path} not found to update.")
+            with open(config_path, "r", encoding="utf8") as f:
+                data = yaml.load(f)
+            if data is None:
+                data = CommentedMap()
+
+            _merge_recursive(data, new_values)
+
+            # Write beside the original and replace it only after a complete dump.
+            # A crash or full disk can therefore not leave config.yml half-written.
+            temp_path = config_path.with_name(f".{config_path.name}.tmp")
+            try:
+                with open(temp_path, "w", encoding="utf8") as f:
+                    yaml.dump(data, f)
+                temp_path.replace(config_path)
+            finally:
+                if temp_path.exists():
+                    try:
+                        temp_path.unlink()
+                    except OSError:
+                        pass
+        except Exception as exc:
+            logger.error(f"Failed to update config file: {exc}")
+            raise
+
+    # Update the live memory object
+    for section_name, section_values in new_values.items():
+        if not hasattr(config, section_name):
+            continue
+        section = getattr(config, section_name)
+        if not isinstance(section, BaseConfigModel):
+            continue
+        for key, value in section_values.items():
+            if hasattr(section, key):
+                try:
+                    setattr(section, key, value)
+                except Exception as e:
+                    logger.error(f"Failed to update config.{section_name}.{key}: {e}")
+
+    # `apply_load_defaults` reads these cached dictionaries. Keep them in sync
+    # so a config-only save affects the next model load without a server restart.
+    config.model_defaults.clear()
+    config.draft_model_defaults.clear()
+    for field in config.model.use_as_default:
+        if hasattr(config.model, field):
+            config.model_defaults[field] = getattr(config.model, field)
+        elif hasattr(config.draft_model, field):
+            config.draft_model_defaults[field] = getattr(config.draft_model, field)
 
 
 def generate_config_file(

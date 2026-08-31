@@ -2,6 +2,7 @@
 
 import aiofiles
 import asyncio
+import gc
 import pathlib
 from enum import Enum
 from fastapi import HTTPException
@@ -29,6 +30,20 @@ embeddings_container = None
 # Serializes model loads and swaps. The container's load_lock is per-instance
 # and can't order operations that span two containers.
 load_lock = asyncio.Lock()
+
+
+def _release_cuda_cache():
+    """Best-effort cleanup for failed loads, including partially built containers."""
+
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception as exc:
+        # Cleanup must never hide the original model-load error.
+        xlogger.debug(f"Unable to empty the CUDA cache after a failed load: {exc}")
 
 
 # A broken infinity-emb install (e.g. missing transitive dependencies) only
@@ -148,6 +163,32 @@ async def load_model_gen(model_path: pathlib.Path, **kwargs):
     global container
 
     async with load_lock:
+        # 判断本次请求是否携带配置更新
+        # 排除掉标志位和路径信息，如果有其他的键，说明要应用新参数，不能走“同模型跳过加载”的捷径
+        draft_args = kwargs.get("draft_model")
+        config_keys = [
+            key
+            for key in kwargs
+            if key
+            not in (
+                "model_name",
+                "skip_queue",
+                "skip_wait",
+                "persist",
+                "draft_model",
+            )
+        ]
+        has_config_args = bool(config_keys)
+        if isinstance(draft_args, dict):
+            # draft_model_dir is injected for every request and is not itself a
+            # runtime setting. Any other nested field requires a real reload.
+            meaningful_draft_args = {
+                key: value
+                for key, value in draft_args.items()
+                if key != "draft_model_dir"
+            }
+            has_config_args = has_config_args or bool(meaningful_draft_args)
+
         # Check if the model is already loaded. Compare full resolved paths:
         # quant-style layouts give unrelated models the same directory
         # basename (e.g. <model_a>/exl3/4.00bpw vs <model_b>/exl3/4.00bpw),
@@ -156,12 +197,17 @@ async def load_model_gen(model_path: pathlib.Path, **kwargs):
             loaded_model_dir = container.model_dir
 
             if loaded_model_dir.resolve() == model_path.resolve() and container.loaded:
-                xlogger.info(f'Model "{loaded_model_dir.name}" is already loaded')
+                if not has_config_args:
+                    xlogger.info(f'Model "{loaded_model_dir.name}" is already loaded')
 
-                # Emit a terminal progress event so API clients always
-                # see a "finished" status even when no load was needed
-                yield 1, 1, ModelType.MODEL.value
-                return
+                    # Emit a terminal progress event so API clients always
+                    # see a "finished" status even when no load was needed
+                    yield 1, 1, ModelType.MODEL.value
+                    return
+                else:
+                    xlogger.info(
+                        f'Reloading model "{loaded_model_dir.name}" with updated config.'
+                    )
 
             if container.loaded:
                 xlogger.info("Unloading existing model.")
@@ -190,23 +236,27 @@ async def load_model_gen(model_path: pathlib.Path, **kwargs):
         # Check model compatibility and dependencies before creating a container
         validate_backend(kwargs.get("backend"), hf_model)
 
-        new_container = await ExllamaV3Container.create(model_path.resolve(), hf_model, **kwargs)
-
-        # Add possible types of models that can be loaded
-        model_type = [ModelType.MODEL]
-
-        if new_container.use_draft_model:
-            model_type.insert(0, ModelType.DRAFT)
-
-        if new_container.use_vision:
-            model_type.insert(0, ModelType.VISION)
-
-        load_status = new_container.load_gen(load_progress, **kwargs)
-
-        progress = get_loading_progress_bar()
-        progress.start()
-
+        new_container = None
+        progress = None
         try:
+            new_container = await ExllamaV3Container.create(
+                model_path.resolve(), hf_model, **kwargs
+            )
+
+            # Add possible types of models that can be loaded
+            model_type = [ModelType.MODEL]
+
+            if new_container.use_draft_model:
+                model_type.insert(0, ModelType.DRAFT)
+
+            if new_container.use_vision:
+                model_type.insert(0, ModelType.VISION)
+
+            load_status = new_container.load_gen(load_progress, **kwargs)
+
+            progress = get_loading_progress_bar()
+            progress.start()
+
             index = 0
             async for module, modules in load_status:
                 current_model_type = model_type[index].value
@@ -227,8 +277,22 @@ async def load_model_gen(model_path: pathlib.Path, **kwargs):
                         index += 1
 
             container = new_container
+        except Exception:
+            # The new container is intentionally not published globally until loading
+            # completes. It still owns every partially allocated CUDA tensor, so it
+            # must be explicitly unloaded before the error is returned to the client.
+            container = None
+            if new_container is not None:
+                xlogger.warning("Model load failed. Releasing partially loaded resources.")
+                try:
+                    await new_container.unload(skip_wait=True)
+                except Exception as cleanup_exc:
+                    xlogger.error(f"Failed to unload the partial model: {cleanup_exc}")
+            _release_cuda_cache()
+            raise
         finally:
-            progress.stop()
+            if progress is not None:
+                progress.stop()
 
 
 async def load_model(model_path: pathlib.Path, **kwargs):

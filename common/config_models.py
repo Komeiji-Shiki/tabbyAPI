@@ -233,9 +233,9 @@ class ModelConfig(BaseConfigModel):
         None,
         description=(
             "Size of the prompt cache to allocate (default: max_seq_len).\n"
-            "Must be a multiple of 256 and can't be less than max_seq_len."
+            "Values are rounded up to a multiple of 256. If this is smaller "
+            "than max_seq_len, the effective context is limited to this size."
         ),
-        multiple_of=256,
         gt=0,
     )
     cache_mode: Optional[CACHE_TYPE] = Field(

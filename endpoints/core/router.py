@@ -50,6 +50,7 @@ from endpoints.core.utils.model import (
     get_current_model_list,
     get_dummy_models,
     get_model_list,
+    persist_load_params,
     stream_model_load,
 )
 
@@ -201,6 +202,22 @@ async def load_model(data: ModelLoadRequest) -> ModelLoadResponse:
         raise HTTPException(400, error_message)
 
     return EventSourceResponse(stream_model_load(data, model_path), ping=get_sse_ping_interval())
+
+
+@router.post("/v1/model/config", dependencies=[Depends(check_admin_key)])
+async def save_model_config(data: ModelLoadRequest):
+    """Persist model load parameters without loading or unloading a model."""
+
+    model_path = pathlib.Path(config.model.model_dir) / data.model_name
+    if not data.model_name or not model_path.exists():
+        raise HTTPException(400, "Could not find the selected model in the model directory.")
+
+    try:
+        updates = persist_load_params(data)
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to write config.yml: {exc}") from exc
+
+    return {"success": True, "sections": list(updates.keys())}
 
 
 # Unload model endpoint

@@ -23,7 +23,7 @@ from common.logger import xlogger
 from common.metrics import collector
 
 # Bumped if the record layout changes incompatibly
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 # How many finished records may sit in the write queue before new ones are
 # dropped. Backing up the queue is pointless: stats are cheap to lose, latency
 # is not.

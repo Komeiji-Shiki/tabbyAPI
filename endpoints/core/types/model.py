@@ -109,9 +109,10 @@ class ModelLoadRequest(BaseModel):
         examples=[4096],
     )
     cache_size: Optional[int] = Field(
-        description="Number in tokens, must be multiple of 256",
+        description="Number in tokens; rounded up to a multiple of 256",
         default=None,
         examples=[4096],
+        gt=0,
     )
     cache_mode: Optional[str] = None
     tensor_parallel: Optional[bool] = None
@@ -155,6 +156,10 @@ class ModelLoadRequest(BaseModel):
     # Non-config arguments
     draft_model: Optional[DraftModelLoadRequest] = None
     skip_queue: Optional[bool] = False
+    persist: Optional[bool] = Field(
+        False,
+        description="If true, save these load parameters to config.yml on success.",
+    )
 
 
 class EmbeddingModelLoadRequest(BaseModel):

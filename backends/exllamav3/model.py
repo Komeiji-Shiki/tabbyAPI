@@ -299,12 +299,23 @@ class _LogicalGenerationMetrics:
 
     def _base_stats(self, gen_time: float, total_time: float) -> dict:
         cached_tokens = self.cached_tokens
+        uncached_tokens = (
+            None
+            if cached_tokens is None
+            else max(self.prompt_tokens - cached_tokens, 0)
+        )
         prompt_time = self.prompt_time if self.prompt_time is not None else 0.0
         queue_time = self.queue_time if self.queue_time is not None else 0.0
         requeue_time = max(total_time - queue_time - prompt_time - gen_time, 0.0)
         return {
             "prompt_tokens": self.prompt_tokens,
             "cached_tokens": cached_tokens,
+            # Cache-hit ratios must describe the user's initial prompt only.
+            # Later physical jobs created by output chunking are deliberately
+            # absent from these fields.
+            "cache_scope": "initial_request",
+            "initial_cached_tokens": cached_tokens,
+            "initial_uncached_tokens": uncached_tokens,
             "prefill_tokens": self.prefill_tokens,
             "prompt_time": round(prompt_time, 2),
             "prompt_tokens_per_sec": self._rate(self.prefill_tokens, prompt_time),
@@ -665,6 +676,7 @@ class ExllamaV3Container:
             )
             cache_size = cache_size_default
 
+        cache_size = self.adjust_cache_size(cache_size)
         if max_seq_len > cache_size:
             xlogger.warning(
                 f"The given max_seq_len ({max_seq_len}) is larger than the cache size "
@@ -1138,6 +1150,21 @@ class ExllamaV3Container:
 
             xlogger.info("Model unloaded.")
         finally:
+            # Also run this path when unloading a partially loaded model raises.
+            # Dropping every strong reference lets PyTorch return the allocations.
+            self.loaded = False
+            self.generator = None
+            self.model = None
+            self.config = None
+            self.cache = None
+            self.tokenizer = None
+            self.draft_model = None
+            self.draft_config = None
+            self.draft_cache = None
+            self.vision_model = None
+            gc.collect()
+            torch.cuda.empty_cache()
+
             if not do_shutdown:
                 self.load_lock.release()
 

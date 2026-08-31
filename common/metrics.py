@@ -32,6 +32,7 @@ LIVE_WINDOW = 5.0
 TPS_WINDOW = 5.0
 # Chart windows offered by the dashboard, in seconds
 SERIES_WINDOWS = (30, 60, 180, 600)
+CACHE_SCOPE_INITIAL_REQUEST = "initial_request"
 
 
 def _num(value: Any, default: float = 0.0) -> float:
@@ -59,8 +60,24 @@ _ABORT_REASONS = {"cancelled", "canceled", "aborted", "incomplete", "error"}
 
 def _is_aborted(entry: dict) -> bool:
     reason = str(entry.get("finish_reason") or entry.get("eos_reason") or "").lower()
-    # Legacy interrupted rows used a missing cache count as their only marker.
-    return reason in _ABORT_REASONS or entry.get("cached_tokens") is None
+    if reason:
+        return reason in _ABORT_REASONS
+    # Very old interrupted rows used a missing cache count as their only marker.
+    return entry.get("cached_tokens") is None
+
+
+def _initial_cache_tokens(entry: dict) -> Optional[tuple]:
+    """Return request-initial cache hits/misses, never physical requeue data."""
+
+    if entry.get("cache_scope") != CACHE_SCOPE_INITIAL_REQUEST:
+        return None
+
+    cached_value = entry.get("initial_cached_tokens")
+    uncached_value = entry.get("initial_uncached_tokens")
+    if cached_value is None or uncached_value is None:
+        return None
+
+    return max(_num(cached_value), 0.0), max(_num(uncached_value), 0.0)
 
 
 class MetricsCollector:
@@ -221,6 +238,9 @@ class MetricsCollector:
             "prompt_tokens": state["prompt_tokens"],
             "cached_tokens": None,
             "new_tokens": None,
+            "cache_scope": CACHE_SCOPE_INITIAL_REQUEST,
+            "initial_cached_tokens": None,
+            "initial_uncached_tokens": None,
             "prefill_tokens": None,
             "gen_tokens": state["gen_tokens"],
             "prompt_tps": None,
@@ -326,12 +346,13 @@ class MetricsCollector:
             totals["cancelled_gen_tokens"] += gen_tokens
             totals["cancelled_time"] += total_time
 
-        cached_value = entry.get("cached_tokens")
-        new_prompt_tokens = None
-        if cached_value is not None:
-            cached_tokens = _num(cached_value)
-            new_prompt_tokens = max(prompt_tokens - cached_tokens, 0.0)
-            totals["cache_scored_prompt_tokens"] += prompt_tokens
+        initial_cache = _initial_cache_tokens(entry)
+        if initial_cache is not None:
+            cached_tokens, new_prompt_tokens = initial_cache
+            # The denominator is the sum of cache hits and misses observed at
+            # the start of each logical user request. Output-chunk requeues and
+            # their intermediate prefills never enter this total.
+            totals["cache_scored_prompt_tokens"] += cached_tokens + new_prompt_tokens
             totals["cached_tokens"] += cached_tokens
             totals["new_prompt_tokens"] += new_prompt_tokens
 
@@ -361,11 +382,12 @@ class MetricsCollector:
         """Store the final per-request metrics and update cumulative totals."""
 
         prompt_tokens = _int(metrics.get("prompt_tokens"))
-        cached_value = metrics.get("cached_tokens")
-        cached_tokens = None if cached_value is None else _num(cached_value)
-        new_tokens = (
-            None if cached_tokens is None else max(prompt_tokens - cached_tokens, 0.0)
-        )
+        initial_cache = _initial_cache_tokens(metrics)
+        if initial_cache is None:
+            cached_tokens = None
+            new_tokens = None
+        else:
+            cached_tokens, new_tokens = initial_cache
         gen_tokens = _int(metrics.get("gen_tokens"))
         prompt_time = (
             None if metrics.get("prompt_time") is None else _num(metrics.get("prompt_time"))
@@ -385,6 +407,13 @@ class MetricsCollector:
             "prompt_tokens": prompt_tokens,
             "cached_tokens": None if cached_tokens is None else round(cached_tokens, 1),
             "new_tokens": None if new_tokens is None else round(new_tokens, 1),
+            "cache_scope": metrics.get("cache_scope"),
+            "initial_cached_tokens": (
+                None if cached_tokens is None else round(cached_tokens, 1)
+            ),
+            "initial_uncached_tokens": (
+                None if new_tokens is None else round(new_tokens, 1)
+            ),
             "prefill_tokens": (
                 None if prefill_tokens is None else round(_num(prefill_tokens), 1)
             ),
@@ -415,8 +444,38 @@ class MetricsCollector:
         Feed these oldest-first so the newest ends up on top of the table.
         """
 
-        self.recent.appendleft(dict(entry))
-        self._fold_totals(entry)
+        adopted = dict(entry)
+
+        # Version-1 records written after logical request tracking was added
+        # always contain requeue_count. Their prompt/cache values are already
+        # initial-request values, so they can be upgraded safely in memory.
+        # Earlier records cannot be distinguished from output-chunk pollution;
+        # leave their cache measurement unknown instead of corrupting ratios.
+        if (
+            adopted.get("cache_scope") != CACHE_SCOPE_INITIAL_REQUEST
+            and "requeue_count" in adopted
+            and adopted.get("cached_tokens") is not None
+        ):
+            prompt_tokens = max(_num(adopted.get("prompt_tokens")), 0.0)
+            cached_tokens = min(
+                max(_num(adopted.get("cached_tokens")), 0.0),
+                prompt_tokens,
+            )
+            adopted["cache_scope"] = CACHE_SCOPE_INITIAL_REQUEST
+            adopted["initial_cached_tokens"] = cached_tokens
+            adopted["initial_uncached_tokens"] = max(prompt_tokens - cached_tokens, 0.0)
+
+        initial_cache = _initial_cache_tokens(adopted)
+        if initial_cache is None:
+            adopted["cached_tokens"] = None
+            adopted["new_tokens"] = None
+        else:
+            cached_tokens, uncached_tokens = initial_cache
+            adopted["cached_tokens"] = round(cached_tokens, 1)
+            adopted["new_tokens"] = round(uncached_tokens, 1)
+
+        self.recent.appendleft(adopted)
+        self._fold_totals(adopted)
 
     def reset(self):
         """Clear all collected stats (uptime is preserved)."""
@@ -498,17 +557,18 @@ class MetricsCollector:
         recent_prompt = 0.0
         recent_cached = 0.0
         for entry in self.recent:
-            # Legacy aborted entries carry no cache data; skip unknown values on
-            # both sides. Correctly measured interrupted requests remain scored.
-            if entry.get("cached_tokens") is None:
+            initial_cache = _initial_cache_tokens(entry)
+            if initial_cache is None:
                 continue
-            recent_prompt += entry["prompt_tokens"]
-            recent_cached += entry["cached_tokens"]
+            cached_tokens, uncached_tokens = initial_cache
+            recent_prompt += cached_tokens + uncached_tokens
+            recent_cached += cached_tokens
 
         scored_prompt = totals["cache_scored_prompt_tokens"]
 
         return {
             "total_tokens": prompt,
+            "scored_tokens": round(scored_prompt, 1),
             "cached_tokens": round(cached, 1),
             "hit_ratio": round(cached / scored_prompt, 4) if scored_prompt > 0 else None,
             "recent_tokens": round(recent_prompt, 1),

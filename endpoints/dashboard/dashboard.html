@@ -22,7 +22,10 @@
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: var(--bg);
+    min-height: 100vh;
+    background:
+      radial-gradient(circle at 12% -12%, rgba(77,163,255,.10), transparent 34rem),
+      var(--bg);
     color: var(--text);
     font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
     font-size: 14px;
@@ -34,7 +37,7 @@
     border-bottom: 1px solid var(--border);
     position: sticky; top: 0; z-index: 10;
   }
-  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; white-space: nowrap; }
   header .grow { flex: 1; }
   .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .dot.ok { background: var(--green); box-shadow: 0 0 6px var(--green); }
@@ -47,25 +50,33 @@
   }
   button {
     background: var(--bg-3); color: var(--text); border: 1px solid var(--border);
-    border-radius: 6px; padding: 5px 12px; cursor: pointer; font-size: 13px;
+    border-radius: 7px; padding: 6px 12px; cursor: pointer; font-size: 13px;
+    transition: border-color .16s, background .16s, color .16s, transform .16s;
   }
-  button:hover { border-color: var(--accent); }
+  button:hover { border-color: var(--accent); background: rgba(77,163,255,.08); }
+  button:active:not(:disabled) { transform: translateY(1px); }
   button:disabled { opacity: .45; cursor: not-allowed; }
   button.danger:hover { border-color: var(--red); color: var(--red); }
-  button.primary { border-color: var(--accent); color: var(--accent); }
+  button.primary { border-color: var(--accent); color: #dcebff; background: rgba(77,163,255,.13); }
+  button:focus-visible, select:focus-visible, input:focus-visible {
+    outline: 2px solid rgba(77,163,255,.72); outline-offset: 2px;
+  }
   select, input[type=text], input[type=password] {
     background: var(--bg-3); color: var(--text); border: 1px solid var(--border);
     border-radius: 6px; padding: 5px 8px; font-size: 13px; min-width: 0;
   }
   main { padding: 16px 18px 40px; max-width: 1500px; margin: 0 auto; }
   .cards {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: 12px; margin-bottom: 14px;
   }
   .card {
     background: var(--bg-2); border: 1px solid var(--border);
-    border-radius: 10px; padding: 12px 14px;
+    border-radius: 11px; padding: 12px 14px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.10);
+    transition: border-color .18s, transform .18s;
   }
+  .card:hover { border-color: #3b4960; transform: translateY(-1px); }
   .card .label { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   .card .value { font-size: 24px; font-weight: 650; line-height: 1.15; }
   .card .value small { font-size: 12px; color: var(--muted); font-weight: 400; }
@@ -80,7 +91,8 @@
   .bar > div { height: 100%; background: var(--accent); border-radius: 3px; transition: width .4s; }
   .panel {
     background: var(--bg-2); border: 1px solid var(--border);
-    border-radius: 10px; margin-bottom: 14px; overflow: hidden;
+    border-radius: 11px; margin-bottom: 14px; overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0,0,0,.08);
   }
   .panel > .head {
     display: flex; align-items: center; gap: 10px;
@@ -106,6 +118,8 @@
   .kv td.desc { color: var(--muted); font-size: 12px; white-space: normal; }
   .kv td.val { font-variant-numeric: tabular-nums; }
   .inline-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .inline-form > select { min-width: 180px; max-width: 100%; }
+  #sel-model { min-width: min(360px, 100%); }
   .row { margin-bottom: 10px; }
   .row .t { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
   .toast-zone { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 100; }
@@ -116,6 +130,7 @@
   }
   .toast.err { border-left-color: var(--red); }
   .toast.ok { border-left-color: var(--green); }
+  .toast.warn { border-left-color: var(--yellow); }
   @keyframes slidein { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }
   .modal-mask {
     position: fixed; inset: 0; background: rgba(0,0,0,.55);
@@ -131,7 +146,11 @@
   .hidden { display: none !important; }
   .muted { color: var(--muted); }
   .small { font-size: 12px; }
-  .loadlog { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); max-height: 120px; overflow: auto; }
+  .loadlog { font-family: Consolas, monospace; font-size: 12px; color: var(--muted); max-height: 150px; overflow: auto; }
+  .loadlog:not(:empty) {
+    margin-top: 10px; padding: 9px 10px; white-space: pre-wrap;
+    background: rgba(0,0,0,.18); border: 1px solid var(--border); border-radius: 7px;
+  }
   .inline-form label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; }
   .inline-form label input { width: 92px; }
   .inline-form label input.narrow { width: 58px; }
@@ -158,10 +177,12 @@
   }
   .field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
   .field > .name { font-size: 12px; color: var(--muted); }
+  .field-note { min-height: 16px; font-size: 11px; line-height: 1.4; color: var(--muted); }
+  .field-note.adjusted { color: var(--yellow); }
   .field input[type=text], .field select { width: 100%; }
   .field.check { flex-direction: row; align-items: center; gap: 7px; }
   .field.check > .name { flex: 1; }
-  .field.off { opacity: .35; }
+  .field.off { display: none; }
   input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; flex: none; }
   .group + .group { margin-top: 13px; padding-top: 12px; border-top: 1px solid var(--border); }
   .subhead { font-size: 12px; color: var(--accent); font-weight: 600; margin-bottom: 8px; }
@@ -170,26 +191,66 @@
     font-size: 11px; color: var(--yellow); border: 1px dashed var(--yellow);
     border-radius: 6px; padding: 0 6px;
   }
+  .badge.saved { color: var(--green); border-color: var(--green); }
+  .form-status { min-height: 18px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+  .form-status.warn { color: var(--yellow); }
+  .form-status.err { color: var(--red); }
   .actions-row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 13px; flex-wrap: wrap; }
+  .action-group { display: flex; gap: 8px; flex-wrap: wrap; }
+  .action-group.commit { justify-content: flex-end; }
   .rt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
   .rt-head .t { margin: 0; }
+
+  @media (max-width: 700px) {
+    header { flex-wrap: wrap; gap: 7px 8px; padding: 9px 10px; }
+    header h1 { order: 1; flex: 1 1 auto; font-size: 15px; }
+    header .grow, #h-hint { display: none; }
+    #interval, #btn-refresh { order: 1; }
+    #btn-keys, #h-health, #h-model, #h-uptime { order: 2; }
+    #h-model { flex: 1 1 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    main { padding: 12px 10px 32px; }
+    .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .card { padding: 11px 12px; }
+    .card .value { font-size: 21px; }
+    .panel > .head, .panel > .body { padding-left: 11px; padding-right: 11px; }
+    .panel > .head { flex-wrap: wrap; }
+    .panel > .head > .grow { display: none; }
+    .panel > .head > .legend { flex: 1 1 100%; }
+    .inline-form > select, #sel-model { flex: 1 1 100%; width: 100%; }
+    canvas#chart { height: 190px; }
+    .action-group { flex: 1 1 100%; }
+    .action-group button { flex: 1 1 0; min-height: 36px; white-space: nowrap; }
+    .toast-zone { left: 10px; right: 10px; bottom: 10px; }
+    .toast { max-width: none; }
+  }
+  @media (max-width: 430px) {
+    #h-uptime { display: none; }
+    #interval { max-width: 88px; }
+  }
+  @media (max-width: 340px) {
+    .cards { grid-template-columns: 1fr; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>🐱 TabbyAPI 监控台</h1>
-  <span class="chip"><span class="dot off" id="h-dot"></span><span id="h-status">连接中…</span></span>
+  <span class="chip" id="h-health"><span class="dot off" id="h-dot"></span><span id="h-status">连接中…</span></span>
   <span class="chip" id="h-model">模型：未加载</span>
   <span class="chip" id="h-uptime">运行 —</span>
   <span class="grow"></span>
   <span class="small muted" id="h-hint"></span>
-  <select id="interval">
+  <select id="interval" aria-label="自动刷新间隔">
     <option value="2000">2 秒刷新</option>
     <option value="5000" selected>5 秒刷新</option>
     <option value="10000">10 秒刷新</option>
     <option value="0">暂停</option>
   </select>
-  <button id="btn-keys">密钥</button>
+  <button id="btn-refresh" type="button" title="立即刷新监控数据">刷新</button>
+  <button id="btn-keys" type="button">密钥</button>
 </header>
 
 <main>
@@ -306,8 +367,9 @@
         <div class="row">
           <div class="rt-head">
             <span class="t">运行时参数</span>
-            <span class="small muted">改动需重载模型生效，会中断进行中的生成</span>
+            <span class="small muted">可单独写入配置；应用时会加载或重载目标模型，并中断当前生成</span>
             <span class="badge hidden" id="rt-dirty-badge">有未应用的修改</span>
+            <span class="small muted" id="rt-target"></span>
             <span class="small muted" id="rt-note"></span>
           </div>
           <div class="hint" id="rt-cap"></div>
@@ -316,7 +378,7 @@
             <div class="subhead">上下文与显存</div>
             <div class="form-grid">
               <label class="field"><span class="name">上下文长度（token）</span><input type="text" id="rt-max-seq" inputmode="numeric"></label>
-              <label class="field"><span class="name">KV 缓存（256 倍数）</span><input type="text" id="rt-cache-size" inputmode="numeric"></label>
+              <label class="field"><span class="name">KV 缓存（自动向上补齐）</span><input type="text" id="rt-cache-size" inputmode="numeric" aria-describedby="rt-cache-note"><span class="field-note" id="rt-cache-note">可输入任意正整数，实际值会补齐到 256 的倍数</span></label>
               <label class="field"><span class="name">缓存精度</span>
                 <select id="rt-cache-mode">
                   <option value="">留空＝继承 config</option>
@@ -365,12 +427,18 @@
             </div>
           </div>
 
+          <div class="form-status" id="rt-form-status" aria-live="polite"></div>
           <div class="actions-row">
-            <button id="btn-rt-current">填回当前生效值</button>
-            <button id="btn-rt-default">填回 config.yml 值</button>
-            <button id="btn-reload" class="primary">应用并重载模型</button>
+            <div class="action-group">
+              <button id="btn-rt-current" type="button" title="用当前运行中的参数覆盖表单" disabled>当前生效值</button>
+              <button id="btn-rt-default" type="button" title="用 config.yml 中的参数覆盖表单" disabled>config.yml 值</button>
+            </div>
+            <div class="action-group commit">
+              <button id="btn-save-config" type="button" title="仅写入 config.yml，不加载模型">写入配置</button>
+              <button id="btn-reload" type="button" class="primary" title="使用表单参数加载或重载目标模型">应用并重载模型</button>
+            </div>
           </div>
-          <div class="loadlog small" id="rt-log"></div>
+          <div class="loadlog small" id="rt-log" aria-live="polite"></div>
         </div>
         <div class="row">
           <div class="t">模型（选好后点「加载模型」即切换，会自动卸载当前模型）<span class="small muted" id="run-info"></span></div>
@@ -418,7 +486,7 @@
   </div>
 </div>
 
-<div class="toast-zone" id="toasts"></div>
+<div class="toast-zone" id="toasts" aria-live="polite" aria-atomic="true"></div>
 
 <script>
 "use strict";
@@ -434,9 +502,38 @@ const S = {
   loadAbort: null,
   chartWindow: parseInt(localStorage.getItem("tabby.dash.chartWindow") || "180", 10) || 180,
   rtDirty: {},
+  rtConfigSaved: false,
+  // 记住最近一次成功或失败的加载目标。显存不足时当前模型会为空，
+  // 仍需保留目标模型，才能用调低后的参数直接重试。
+  lastModelName: sessionStorage.getItem("tabby.dash.lastModelName") || null,
 };
 
 const $ = (id) => document.getElementById(id);
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[ch]);
+}
+
+function canAdmin() {
+  return Boolean(S.adminKey || (S.overview && S.overview.server.auth_disabled));
+}
+
+function rememberModelName(name) {
+  if (!name) return;
+  S.lastModelName = name;
+  sessionStorage.setItem("tabby.dash.lastModelName", name);
+}
+
+function updateRuntimeTarget() {
+  const ov = S.overview || {};
+  const selected = $("sel-model") ? $("sel-model").value : "";
+  const target = ((ov.server || {}).model_name) || selected || S.lastModelName;
+  if ($("rt-target")) {
+    $("rt-target").textContent = target ? `目标模型：${target}` : "尚未选择目标模型";
+  }
+}
 
 function fmt(n, digits = 0) {
   if (n === null || n === undefined || n === "Indeterminate") return "—";
@@ -595,6 +692,8 @@ function render(ov) {
   S.overview = ov;
   const rt = ov.runtime, be = ov.backend, sys = ov.system, cfg = ov.config;
 
+  rememberModelName(ov.server.model_name);
+
   $("h-dot").className = "dot " + (ov.health.status === "healthy" ? "ok" : "bad");
   $("h-status").textContent = ov.health.status === "healthy" ? "服务正常" : "服务异常";
   if (ov.health.issues && ov.health.issues.length) $("h-status").textContent += "（" + ov.health.issues.join("; ") + "）";
@@ -701,7 +800,8 @@ function renderJobs(ov) {
   }
 
   const rows = jobs.map((j) => {
-    const phase = j.phase || "generate";
+    const phase = ["prefill", "queued", "generate"].includes(j.phase)
+      ? j.phase : "generate";
     const label = phase === "prefill" ? "预填中" : phase === "queued" ? "排队中" : "生成中";
     let detail;
     if (phase === "prefill" && j.prefill_max > 0) {
@@ -714,10 +814,11 @@ function renderJobs(ov) {
     const tps = j.gen_tokens_per_sec != null
       ? `<span class="metric">瞬时 <b>${fmt(j.gen_tokens_per_sec, 1)}</b> T/s</span>` : "";
     const spent = j.elapsed != null ? `<span class="metric">已用 ${fmt(j.elapsed, 1)}s</span>` : "";
-    const btn = (S.adminKey && phase !== "queued")
-      ? `<button class="danger small" data-cancel="${j.request_id}">取消</button>` : "";
+    const requestId = esc(j.request_id);
+    const btn = (canAdmin() && phase !== "queued")
+      ? `<button class="danger small" data-cancel="${requestId}">取消</button>` : "";
     return `<div class="job"><span class="phase ${phase}">${label}</span>`
-      + `<span class="jid chip">${j.request_id}</span>${detail}${tps}${spent}`
+      + `<span class="jid chip">${requestId}</span>${detail}${tps}${spent}`
       + `<span style="flex:1"></span>${btn}</div>`;
   });
 
@@ -733,33 +834,40 @@ function renderRecent(recent) {
     body.innerHTML = '<tr><td colspan="8" class="muted">暂无已完成的生成记录</td></tr>';
     return;
   }
-  const aborted = (r) => ["cancelled", "canceled", "aborted", "incomplete", "error"]
-    .includes(String(r.finish_reason || r.eos_reason || "").toLowerCase())
-    || r.cached_tokens === null || r.cached_tokens === undefined;
+  const aborted = (r) => {
+    const reason = String(r.finish_reason || r.eos_reason || "").toLowerCase();
+    return ["cancelled", "canceled", "aborted", "incomplete", "error"].includes(reason)
+      || (!reason && (r.cached_tokens === null || r.cached_tokens === undefined));
+  };
   body.innerHTML = recent.map((r) => `
     <tr class="${aborted(r) ? "aborted" : ""}">
       <td>${timeOf(r.ts)}</td>
       <td class="num">${fmt(r.prompt_tokens)}</td>
-      <td class="num" title="前缀缓存命中">${fmt(r.cached_tokens)}</td>
+      <td class="num" title="用户请求初始前缀的缓存命中，不含输出分块重入">${fmt(r.cached_tokens)}</td>
       <td class="num">${fmt(r.gen_tokens)}</td>
       <td class="num accent">${typeof r.gen_tps === "number" ? fmt(r.gen_tps, 1) : "—"}</td>
       <td class="num purple">${typeof r.prompt_tps === "number" ? fmt(r.prompt_tps, 0) : "—"}</td>
       <td class="num">${typeof r.queue_time === "number" ? fmt(r.queue_time, 2) + "s" : "—"}</td>
-      <td class="small muted">${r.eos_reason || r.finish_reason || "—"}</td>
+      <td class="small muted">${esc(r.eos_reason || r.finish_reason || "—")}</td>
     </tr>`).join("");
 }
 
 function fmtValue(v) {
   if (v === null || v === undefined || v === "") return '<span class="muted">—（默认）</span>';
   if (typeof v === "boolean") return v ? '<span class="green">true</span>' : "false";
-  if (typeof v === "object") return '<span class="small">' + JSON.stringify(v) + "</span>";
-  return String(v);
+  if (typeof v === "object") return '<span class="small">' + esc(JSON.stringify(v)) + "</span>";
+  return esc(v);
 }
 
 function renderConfig(cfg) {
   const tabs = $("cfg-tabs");
-  if (!tabs.childElementCount) {
-    tabs.innerHTML = Object.keys(cfg).map((name) => `<button data-sec="${name}">${name}</button>`).join("");
+  const sections = Object.keys(cfg || {});
+  if (!sections.length) return;
+  if (!cfg[S.cfgSection]) S.cfgSection = sections[0];
+  const sectionKey = JSON.stringify(sections);
+  if (tabs.dataset.sections !== sectionKey) {
+    tabs.dataset.sections = sectionKey;
+    tabs.innerHTML = sections.map((name) => `<button data-sec="${esc(name)}">${esc(name)}</button>`).join("");
     tabs.querySelectorAll("button").forEach((b) => {
       b.onclick = () => { S.cfgSection = b.dataset.sec; renderConfig(S.overview.config); };
     });
@@ -769,9 +877,9 @@ function renderConfig(cfg) {
   const section = cfg[S.cfgSection];
   $("cfg-body").innerHTML = (section.fields || []).map((f) => `
     <tr>
-      <td class="key">${f.key}</td>
+      <td class="key">${esc(f.key)}</td>
       <td class="val">${fmtValue(f.value)}</td>
-      <td class="desc">${f.description ? f.description.replace(/\n/g, "<br>") : ""}</td>
+      <td class="desc">${f.description ? esc(f.description).replace(/\n/g, "<br>") : ""}</td>
     </tr>`).join("");
 }
 
@@ -780,16 +888,17 @@ async function refreshOptions() {
   try {
     const models = await api("/v1/models");
     const sel = $("sel-model");
-    const current = S.overview && S.overview.server.model_name;
+    const current = sel.value || (S.overview && S.overview.server.model_name) || S.lastModelName;
     sel.innerHTML = (models.data || []).map((m) => {
-      const name = m.id || m.name;
-      return `<option value="${name}" ${name === current ? "selected" : ""}>${name}</option>`;
+      const name = String(m.id || m.name || "");
+      return `<option value="${esc(name)}" ${name === current ? "selected" : ""}>${esc(name)}</option>`;
     }).join("") || '<option value="">（models 目录为空）</option>';
+    updateRuntimeTarget();
   } catch (_) { /* 离线或鉴权失败时忽略 */ }
 
   try {
     const t = await api("/v1/templates");
-    $("sel-template").innerHTML = (t.data || []).map((x) => `<option value="${x}">${x}</option>`).join("")
+    $("sel-template").innerHTML = (t.data || []).map((x) => `<option value="${esc(x)}">${esc(x)}</option>`).join("")
       || '<option value="">（templates 目录为空）</option>';
   } catch (_) { /* ignore */ }
 
@@ -799,7 +908,7 @@ async function refreshOptions() {
     const cur = o.selected_preset;
     $("sel-override").innerHTML =
       '<option value="">（无预设 / 清除覆盖）</option>' +
-      presets.map((x) => `<option value="${x}" ${x === cur ? "selected" : ""}>${x}</option>`).join("");
+      presets.map((x) => `<option value="${esc(x)}" ${x === cur ? "selected" : ""}>${esc(x)}</option>`).join("");
   } catch (_) { /* ignore */ }
 }
 
@@ -860,12 +969,28 @@ async function loadModel() {
   await streamLoad({ model_name: name });
 }
 
+function setModelControlsBusy(busy, source = "load") {
+  for (const id of ["btn-load", "btn-reload", "btn-save-config", "btn-unload"]) {
+    $(id).disabled = busy;
+  }
+  const loaded = Boolean(S.overview && S.overview.backend && S.overview.backend.model_loaded);
+  $("btn-rt-current").disabled = busy || !loaded;
+  $("btn-rt-default").disabled = busy || !S.overview;
+  if (!busy) $("btn-unload").disabled = !loaded;
+  $("btn-load").textContent = busy && source === "load" ? "加载中…" : "加载模型";
+  $("btn-reload").textContent = busy && source === "load"
+    ? "应用中…"
+    : (loaded ? "应用并重载模型" : "应用并加载模型");
+  $("btn-save-config").textContent = busy && source === "save" ? "写入中…" : "写入配置";
+}
+
 // 重载模型并跟踪 SSE 进度（加载与带参数重载共用这一条链路）
 async function streamLoad(body, logId = "loadlog") {
   const log = $(logId);
+  rememberModelName(body && body.model_name);
   log.textContent = "";
-  $("btn-load").disabled = true;
-  $("btn-reload").disabled = true;
+  setModelControlsBusy(true, "load");
+  let succeeded = false;
   try {
     const res = await fetch("/v1/model/load", {
       method: "POST",
@@ -880,33 +1005,52 @@ async function streamLoad(body, logId = "loadlog") {
     const reader = res.body.getReader();
     const dec = new TextDecoder();
     let buf = "";
+    let streamError = null;
+    let mainFinished = false;
+    const handleSseLine = (line) => {
+      if (!line.startsWith("data:")) return;
+      const payload = line.slice(5).trim();
+      if (!payload) return;
+      try {
+        const ev = JSON.parse(payload);
+        if (ev.error) {
+          streamError = typeof ev.error === "string"
+            ? ev.error
+            : (ev.error.message || JSON.stringify(ev.error));
+          log.textContent += `error ${streamError}\n`;
+          log.scrollTop = log.scrollHeight;
+          return;
+        }
+        const prog = ev.module != null && ev.modules ? `（${ev.module}/${ev.modules}）` : "";
+        log.textContent += `${ev.model_type || ""} ${ev.status || ""} ${prog}\n`;
+        log.scrollTop = log.scrollHeight;
+        if (ev.status === "finished" && ev.model_type === "model") mainFinished = true;
+      } catch (_) { /* 忽略非 JSON 的事件行 */ }
+    };
     for (;;) {
       const { value, done } = await reader.read();
       if (done) break;
       buf += dec.decode(value, { stream: true });
-      const lines = buf.split("\n");
+      const lines = buf.split(/\r?\n/);
       buf = lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith("data:")) continue;
-        const payload = line.slice(5).trim();
-        if (!payload) continue;
-        try {
-          const ev = JSON.parse(payload);
-          const prog = ev.module != null && ev.modules ? `（${ev.module}/${ev.modules}）` : "";
-          log.textContent += `${ev.model_type || ""} ${ev.status || ""} ${prog}\n`;
-          log.scrollTop = log.scrollHeight;
-          if (ev.status === "finished") toast("模型加载完成", "ok");
-        } catch (_) { /* 忽略半行 */ }
-      }
+      for (const line of lines) handleSseLine(line);
     }
+    buf += dec.decode();
+    if (buf) handleSseLine(buf);
+    if (streamError) throw new Error(streamError);
+    if (!mainFinished) throw new Error("加载流已结束，但没有收到主模型加载完成事件");
+    succeeded = true;
+    toast("模型加载完成", "ok");
   } catch (e) {
     toast("加载失败：" + e.message, "err");
   } finally {
-    $("btn-load").disabled = false;
-    $("btn-reload").disabled = false;
-    poll();
+    // 等服务器状态刷新完再开放按钮，避免加载失败后的短暂窗口仍把旧模型
+    // 当成配置目标；模型列表刷新可以随后异步完成。
+    await poll();
     refreshOptions();
+    setModelControlsBusy(false);
   }
+  return succeeded;
 }
 
 // ---------------------------------------------------------------- 运行时参数
@@ -940,7 +1084,7 @@ function rtSetField(f, raw) {
   if (String(el.value) !== String(v)) el.value = v;
 }
 
-// 草稿模式的子选项只在该模式下有意义，灰掉比藏起来更容易看懂
+// 草稿模式的子选项只在对应模式下有意义，隐藏无关项可减少表单干扰
 function fieldEnabled(f, mode) {
   if (!f.draft) return true;
   if (mode === "disabled") return f.key === "draft_mode";
@@ -953,7 +1097,55 @@ function fieldEnabled(f, mode) {
 
 function markDirty() {
   const pending = RT_FIELDS.some((f) => S.rtDirty[f.id]);
-  $("rt-dirty-badge").classList.toggle("hidden", !pending);
+  const badge = $("rt-dirty-badge");
+  badge.classList.toggle("hidden", !pending);
+  badge.classList.toggle("saved", pending && S.rtConfigSaved);
+  if (pending) {
+    const loaded = Boolean(S.overview && S.overview.backend.model_loaded);
+    badge.textContent = S.rtConfigSaved
+      ? (loaded ? "已写入配置，待重载" : "已写入配置，待加载")
+      : "有未保存的修改";
+  }
+}
+
+function roundUp256(value) {
+  return Math.ceil(value / 256) * 256;
+}
+
+function updateCacheRoundingHint() {
+  const el = $("rt-cache-size");
+  const note = $("rt-cache-note");
+  const raw = String(el.value).trim();
+  note.classList.remove("adjusted");
+  if (!raw) {
+    note.textContent = "留空时沿用 config.yml；填写后会自动向上补齐到 256 的倍数";
+    return;
+  }
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    note.textContent = "请输入正整数 token 数";
+    note.classList.add("adjusted");
+    return;
+  }
+  const actual = roundUp256(value);
+  note.textContent = actual === value
+    ? `实际使用 ${fmt(actual)} token`
+    : `将自动使用 ${fmt(actual)} token（由 ${fmt(value)} 向上补齐）`;
+  note.classList.toggle("adjusted", actual !== value);
+}
+
+function showRuntimeMessages(errors, warnings) {
+  const status = $("rt-form-status");
+  status.className = "form-status";
+  if (errors.length) {
+    status.classList.add("err");
+    status.textContent = errors.join("；");
+  } else if (warnings.length) {
+    status.classList.add("warn");
+    status.textContent = warnings.join("；");
+  } else {
+    status.textContent = "";
+  }
 }
 
 function updateRuntimeHints(be) {
@@ -1005,15 +1197,33 @@ function updateRuntimeHints(be) {
     }
   }
   $("rt-draft-hint").textContent = hint;
+  updateCacheRoundingHint();
   markDirty();
 }
 
 function syncRuntimeInputs(be) {
+  be = be || {};
+  $("btn-rt-current").disabled = !be.model_loaded;
+  $("btn-rt-default").disabled = false;
+  $("btn-unload").disabled = !be.model_loaded;
+  if (!$("btn-reload").disabled) {
+    $("btn-reload").textContent = be.model_loaded ? "应用并重载模型" : "应用并加载模型";
+  }
+  const cfg = (S.overview || {}).config || {};
   for (const f of RT_FIELDS) {
     // 主人改过或正在填的控件不被轮询覆盖
     const el = $(f.id);
     if (S.rtDirty[f.id] || document.activeElement === el) continue;
-    rtSetField(f, be[f.key]);
+    let v = be[f.key];
+    if (v === undefined || v === null) {
+      // 刷新时若无运行中数据，自动 fallback 读取本地文件保存的值
+      const grab = (section, key) => {
+        const hit = ((cfg[section] || {}).fields || []).find((x) => x.key === key);
+        return hit ? hit.value : undefined;
+      };
+      v = f.draft ? grab("draft_model", f.key) : grab("model", f.key);
+    }
+    rtSetField(f, v);
   }
   updateRuntimeHints(be);
 
@@ -1022,10 +1232,10 @@ function syncRuntimeInputs(be) {
     .find((x) => x.key === "draft_mode");
   $("rt-note").textContent = be.model_loaded && be.draft_mode
     ? `｜当前生效：${be.draft_mode}｜config.yml：${cfgMode && cfgMode.value ? cfgMode.value : "默认"}`
-    : "";
+    : "｜当前未加载模型，可直接修改后写入或加载";
+  updateRuntimeTarget();
 }
 
-// 把表单填成 config.yml 里的值，方便对比“服务器配置”与“运行现状”
 function fillRuntimeFromConfig() {
   const cfg = (S.overview || {}).config || {};
   const grab = (section, key) => {
@@ -1035,13 +1245,22 @@ function fillRuntimeFromConfig() {
   for (const f of RT_FIELDS) {
     const v = f.draft ? grab("draft_model", f.key) : grab("model", f.key);
     rtSetField(f, v === undefined ? "" : v);
-    S.rtDirty[f.id] = true;
   }
+  S.rtDirty = {};
+  S.rtConfigSaved = false;
+  showRuntimeMessages([], []);
+  markDirty();
   updateRuntimeHints((S.overview || {}).backend || {});
 }
 
 function fillRuntimeFromBackend() {
+  if (!S.overview || !S.overview.backend || !S.overview.backend.model_loaded) {
+    return toast("当前没有已加载的模型", "err");
+  }
   S.rtDirty = {};
+  S.rtConfigSaved = false;
+  showRuntimeMessages([], []);
+  markDirty();
   syncRuntimeInputs((S.overview || {}).backend || {});
 }
 
@@ -1052,6 +1271,7 @@ function readRuntimeForm() {
   const top = {};
   const draft = { draft_mode: mode };
   const errors = [];
+  const warnings = [];
 
   for (const f of RT_FIELDS) {
     if (!fieldEnabled(f, mode)) continue;
@@ -1062,8 +1282,8 @@ function readRuntimeForm() {
     } else {
       const raw = String(el.value).trim();
       if (raw === "") continue;
-      value = f.kind === "int" ? parseInt(raw, 10) : raw;
-      if (f.kind === "int" && Number.isNaN(value)) {
+      value = f.kind === "int" ? Number(raw) : raw;
+      if (f.kind === "int" && !Number.isInteger(value)) {
         errors.push(`${el.closest(".field").querySelector(".name").textContent} 必须是整数`);
         continue;
       }
@@ -1072,19 +1292,40 @@ function readRuntimeForm() {
     else top[f.key] = value;
   }
 
+  if (typeof top.cache_size === "number") {
+    if (top.cache_size <= 0) {
+      errors.push("KV 缓存必须大于 0");
+    } else {
+      const requested = top.cache_size;
+      top.cache_size = roundUp256(requested);
+      if (top.cache_size !== requested) {
+        $("rt-cache-size").value = String(top.cache_size);
+        warnings.push(`KV 缓存已由 ${fmt(requested)} 自动补齐为 ${fmt(top.cache_size)}`);
+      }
+    }
+  }
+  if (typeof top.max_seq_len === "number" && top.max_seq_len !== -1 && top.max_seq_len < 1) {
+    errors.push("上下文长度必须为正整数，或填写 -1 使用模型上限");
+  }
+  if (typeof top.chunk_size === "number") {
+    if (top.chunk_size <= 0) {
+      errors.push("预填 chunk 必须大于 0");
+    } else {
+      const requested = top.chunk_size;
+      top.chunk_size = roundUp256(Math.max(requested, 256));
+      if (top.chunk_size !== requested) {
+        $("rt-chunk").value = String(top.chunk_size);
+        warnings.push(`预填 chunk 已由 ${fmt(requested)} 自动调整为 ${fmt(top.chunk_size)}`);
+      }
+    }
+  }
   const seq = top.max_seq_len ?? be.max_seq_len;
   const cache = top.cache_size ?? be.cache_size;
-  if (typeof cache === "number" && cache % 256 !== 0) {
-    errors.push("KV 缓存必须是 256 的倍数（后端会向上取整，但最好自己填对）");
-  }
   if (typeof seq === "number" && typeof cache === "number" && cache < seq) {
-    errors.push(`KV 缓存 ${fmt(cache)} 小于上下文长度 ${fmt(seq)}，后端会把上下文压到缓存大小`);
+    warnings.push(`KV 缓存小于上下文长度，实际上下文会限制为 ${fmt(cache)} token`);
   }
   if (typeof top.max_batch_size === "number" && top.max_batch_size < 1) {
     errors.push("并发批次至少为 1");
-  }
-  if (typeof top.chunk_size === "number" && top.chunk_size < 256) {
-    errors.push("chunk 小于 256 会被后端抬到 256");
   }
   if (mode === "model" && !draft.draft_model_name) {
     errors.push("model 模式必须填写草稿模型名");
@@ -1093,21 +1334,66 @@ function readRuntimeForm() {
     errors.push("ngram 最小匹配至少为 1");
   }
 
-  return { top, draft, errors };
+  updateCacheRoundingHint();
+  showRuntimeMessages(errors, warnings);
+  return { top, draft, errors, warnings };
 }
 
 async function reloadWithRuntime() {
   const ov = S.overview;
   if (!ov) return toast("还没有拿到服务器数据", "err");
-  const name = ov.server.model_name;
-  if (!name) return toast("当前没有已加载的模型，请先用下方「加载模型」", "err");
+  const selected = $("sel-model") ? $("sel-model").value : "";
+  const name = ov.server.model_name || selected || S.lastModelName;
+  if (!name) return toast("当前没有加载目标，请先在下方选择一个模型", "err");
 
-  const { top, draft, errors } = readRuntimeForm();
+  const { top, draft, errors, warnings } = readRuntimeForm();
   if (errors.length) return toast(errors.join("；"), "err");
+  if (warnings.length) toast(warnings.join("；"), "warn");
 
-  await streamLoad({ model_name: name, ...top, draft_model: draft }, "rt-log");
-  S.rtDirty = {};
-  markDirty();
+  const succeeded = await streamLoad(
+    { model_name: name, ...top, draft_model: draft },
+    "rt-log",
+  );
+  // 加载失败时保留修改标记和表单值，让主人继续降低显存占用后重试。
+  if (succeeded) {
+    S.rtDirty = {};
+    S.rtConfigSaved = false;
+    showRuntimeMessages([], []);
+    markDirty();
+  }
+}
+
+async function saveRuntimeConfig() {
+  const ov = S.overview;
+  if (!ov) return toast("还没有拿到服务器数据", "err");
+
+  const selected = $("sel-model") ? $("sel-model").value : "";
+  const name = ov.server.model_name || selected || S.lastModelName;
+  if (!name) return toast("当前没有保存目标，请先在下方选择一个模型", "err");
+
+  const { top, draft, errors, warnings } = readRuntimeForm();
+  if (errors.length) return toast(errors.join("；"), "err");
+  if (warnings.length) toast(warnings.join("；"), "warn");
+
+  setModelControlsBusy(true, "save");
+  try {
+    await api("/v1/model/config", {
+      method: "POST",
+      body: JSON.stringify({ model_name: name, ...top, draft_model: draft }),
+    });
+    rememberModelName(name);
+    S.rtConfigSaved = true;
+    markDirty();
+    const loaded = Boolean(S.overview && S.overview.backend && S.overview.backend.model_loaded);
+    toast(loaded
+      ? "配置已写入 config.yml；运行中的模型尚未重载"
+      : "配置已写入 config.yml；将在下次加载模型时生效", "ok");
+    await poll();
+  } catch (e) {
+    if (e.message !== "401 未授权") toast("写入配置失败：" + e.message, "err");
+  } finally {
+    setModelControlsBusy(false);
+  }
 }
 
 // ---------------------------------------------------------------- 轮询与密钥
@@ -1161,6 +1447,17 @@ $("btn-key-save").onclick = () => {
 
 $("btn-key-cancel").onclick = () => $("key-modal").classList.add("hidden");
 $("btn-keys").onclick = () => openKeyModal("访问密钥");
+$("btn-refresh").onclick = async () => {
+  const button = $("btn-refresh");
+  button.disabled = true;
+  button.textContent = "刷新中…";
+  try {
+    await Promise.allSettled([poll(), refreshOptions()]);
+  } finally {
+    button.disabled = false;
+    button.textContent = "刷新";
+  }
+};
 $("btn-reset").onclick = resetStats;
 $("btn-template").onclick = () => switchTemplate(false);
 $("btn-template-unload").onclick = () => switchTemplate(true);
@@ -1168,7 +1465,12 @@ $("btn-override").onclick = switchOverride;
 $("btn-override-unload").onclick = () => { $("sel-override").value = ""; switchOverride(); };
 $("btn-load").onclick = loadModel;
 $("btn-unload").onclick = unloadModel;
+$("sel-model").onchange = () => {
+  rememberModelName($("sel-model").value);
+  updateRuntimeTarget();
+};
 $("btn-reload").onclick = reloadWithRuntime;
+$("btn-save-config").onclick = saveRuntimeConfig;
 $("btn-rt-current").onclick = fillRuntimeFromBackend;
 $("btn-rt-default").onclick = fillRuntimeFromConfig;
 $("chart-win").onchange = (e) => {
@@ -1180,18 +1482,27 @@ RT_FIELDS.forEach((f) => {
   const el = $(f.id);
   const on = () => {
     S.rtDirty[f.id] = true;
+    S.rtConfigSaved = false;
+    showRuntimeMessages([], []);
+    if (f.id === "rt-cache-size") updateCacheRoundingHint();
     if (f.id === "rt-draft-mode") updateRuntimeHints((S.overview || {}).backend || {});
     else markDirty();
   };
   el.addEventListener("input", on);
   el.addEventListener("change", on);
 });
-$("interval").onchange = schedule;
+$("interval").onchange = () => {
+  schedule();
+  if (parseInt($("interval").value, 10) > 0) poll();
+};
 window.addEventListener("resize", () => S.overview && drawChart(S.overview.runtime.series));
 
 // ---------------------------------------------------------------- 启动
 (async function boot() {
   $("chart-win").value = String(S.chartWindow);
+  updateRuntimeHints({});
+  updateRuntimeTarget();
+  setModelControlsBusy(false);
   schedule();
   await poll();
   await refreshOptions();

@@ -22,6 +22,11 @@ def completed(
         "request_id": request_id,
         "prompt_tokens": prompt_tokens,
         "cached_tokens": cached_tokens,
+        "cache_scope": "initial_request",
+        "initial_cached_tokens": cached_tokens,
+        "initial_uncached_tokens": (
+            None if cached_tokens is None else max(prompt_tokens - cached_tokens, 0)
+        ),
         "gen_tokens": gen_tokens,
         "prompt_time": prompt_time,
         "gen_time": gen_time,
@@ -133,8 +138,23 @@ class AbortedGenerationTests(unittest.TestCase):
         # not out of 1200 which would fake the ratio down
         self.assertAlmostEqual(stats["hit_ratio"], 0.256, places=4)
         self.assertEqual(stats["recent_tokens"], 1000)
-        # absolute totals still contain everything
+        # Absolute request totals still contain everything, while scored_tokens
+        # is limited to requests whose initial cache result is known.
         self.assertEqual(stats["total_tokens"], 1200)
+        self.assertEqual(stats["scored_tokens"], 1000)
+
+    def test_hit_ratio_ignores_physical_chunk_cache_values(self):
+        first = completed("chunked", 1586, 26624.0, 1112)
+        first["initial_cached_tokens"] = 772
+        first["initial_uncached_tokens"] = 814
+        self.collector.record_generation(first)
+        self.collector.record_generation(completed("next", 1000, 200.0, 10))
+
+        stats = self.collector.cache_hit_stats()
+        self.assertEqual(stats["cached_tokens"], 972.0)
+        self.assertEqual(stats["scored_tokens"], 2586.0)
+        self.assertEqual(stats["hit_ratio"], round(972 / 2586, 4))
+        self.assertEqual(self.collector.recent[1]["cached_tokens"], 772.0)
 
     def test_rate_averages_exclude_aborted_work(self):
         self.collector.record_generation(completed("ok", 1000, 256.0, 50, gen_time=1.0))
@@ -241,7 +261,44 @@ class GenerationStoreReplayTests(unittest.TestCase):
         self.assertEqual(totals["cancelled_requests"], 1)
         self.assertEqual(totals["prompt_tokens"], 180)
         self.assertEqual(totals["gen_tokens"], 8)
+        self.assertIsNone(metrics.collector.recent[1]["cached_tokens"])
         self.assertEqual(store.stored, 2)
+
+    def test_replay_ignores_ambiguous_pre_tracker_cache_records(self):
+        path = self.dir / "legacy.jsonl"
+        records = [
+            {
+                "request_id": "polluted",
+                "prompt_tokens": 28669,
+                "cached_tokens": 26624.0,
+                "gen_tokens": 3258,
+                "finish_reason": "stop",
+                "_v": 1,
+            },
+            {
+                "request_id": "logical-v1",
+                "prompt_tokens": 1000,
+                "cached_tokens": 256.0,
+                "gen_tokens": 10,
+                "finish_reason": "stop",
+                "requeue_count": 0,
+                "_v": 1,
+            },
+        ]
+        with path.open("w", encoding="utf8") as handle:
+            for record in records:
+                handle.write(json.dumps(record) + "\n")
+
+        store = GenerationStore(path, max_entries=100)
+        self.assertEqual(store.restore(), 2)
+
+        stats = metrics.collector.cache_hit_stats()
+        self.assertEqual(stats["cached_tokens"], 256.0)
+        self.assertEqual(stats["scored_tokens"], 1000.0)
+        self.assertEqual(stats["hit_ratio"], 0.256)
+        by_id = {entry["request_id"]: entry for entry in metrics.collector.recent}
+        self.assertIsNone(by_id["polluted"]["cached_tokens"])
+        self.assertEqual(by_id["logical-v1"]["cached_tokens"], 256.0)
 
     def test_missing_file_restores_nothing(self):
         store = GenerationStore(self.dir / "nope.jsonl", max_entries=10)
