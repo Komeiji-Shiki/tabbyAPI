@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from endpoints.OAI.utils.stream_parser import (
@@ -147,6 +148,36 @@ class TagStreamParserTests(unittest.TestCase):
         out = collect(p, chunks)
         self.assertEqual(out["reasoning"], "I think so\n")
         self.assertEqual(out["content"], "\n\nYes, 4.")
+
+
+class QwenToolCallStreamParserTests(unittest.TestCase):
+    def test_emits_function_and_argument_deltas_incrementally(self):
+        from endpoints.OAI.utils.toolcall_formats.qwen3_coder import StreamToolCallParser
+
+        text = (
+            "<tool_call><function=get_weather>"
+            "<parameter=city>Tokyo</parameter>"
+            "<parameter=units>metric</parameter>"
+            "</function></tool_call>"
+        )
+        parser = StreamToolCallParser()
+        first_boundary = text.index("<parameter")
+        deltas = parser.feed(text[:first_boundary])
+
+        self.assertEqual(len(deltas), 1)
+        self.assertEqual(deltas[0]["index"], 0)
+        self.assertTrue(deltas[0]["id"].startswith("call_"))
+        self.assertEqual(deltas[0]["function"], {"name": "get_weather", "arguments": ""})
+
+        for offset in range(first_boundary, len(text), 2):
+            deltas.extend(parser.feed(text[offset : offset + 2]))
+        deltas.extend(parser.finish())
+
+        arguments = "".join(
+            delta.get("function", {}).get("arguments", "") for delta in deltas
+        )
+        self.assertEqual(json.loads(arguments), {"city": "Tokyo", "units": "metric"})
+        self.assertTrue(parser.has_tool_calls)
 
 
 class HarmonyStreamParserTests(unittest.TestCase):

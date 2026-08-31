@@ -40,6 +40,7 @@ from endpoints.OAI.utils.stream_parser import (
 )
 from endpoints.OAI.utils.tools import (
     get_toolcall_tags,
+    get_stream_toolcall_parser,
     parse_toolcalls,
 )
 from endpoints.OAI.utils.common_ import aggregate_usage_stats, get_usage_stats
@@ -616,8 +617,9 @@ async def _chat_stream_collector(
     choice.
 
     In streaming mode, emits chunks of text to be emitted as deltas to the client, divided into
-    reasoning/content/tool phases. Tool calls are parsed together at the end of stream, so the
-    last chunk contains all tool calls collected for the turn.
+    reasoning/content/tool phases. Formats with an incremental tool parser emit tool call
+    deltas as soon as their syntax provides a function name or argument; other formats keep
+    the existing end-of-stream parsing behavior.
 
     In non-streaming mode, collects everything with the same logic but then emits a single
     response packet at the end, to be combined with any other choices (for n>1 requests) and
@@ -628,6 +630,7 @@ async def _chat_stream_collector(
     full_reasoning = ""
     full_content = ""
     full_tool = ""
+    stream_tool_parser = None
 
     if mc.harmony:
         # Harmony messages carry their own channel structure, superseding the
@@ -644,6 +647,8 @@ async def _chat_stream_collector(
         tool_format = mc.tool_format
         t_tool_start, t_tool_end = get_toolcall_tags(tool_format)
         use_tool = params.tool_choice != "none" and bool(t_tool_start)
+        if streaming_mode and use_tool:
+            stream_tool_parser = get_stream_toolcall_parser(tool_format)
 
         use_think = mc.reasoning and bool(mc.reasoning_start_token)
 
@@ -705,6 +710,7 @@ async def _chat_stream_collector(
 
             delta_reasoning = ""
             delta_content = ""
+            delta_tool_calls = []
             for channel, sub in events:
                 if channel == REASONING:
                     delta_reasoning += sub
@@ -714,6 +720,11 @@ async def _chat_stream_collector(
                     full_content += sub
                 else:
                     full_tool += sub
+                    if stream_tool_parser is not None:
+                        delta_tool_calls.extend(stream_tool_parser.feed(sub))
+
+            if finish_reason and stream_tool_parser is not None:
+                delta_tool_calls.extend(stream_tool_parser.finish())
 
             # Count reasoning tokens and force the end of the reasoning phase
             # when the budget is exhausted. Attribution is approximate: a
@@ -746,12 +757,26 @@ async def _chat_stream_collector(
                         collected_logprobs = []
                 generation["delta_reasoning_content"] = delta_reasoning
                 generation["delta_content"] = delta_content
-                generation["delta_tool_calls"] = ""
+                generation["delta_tool_calls"] = delta_tool_calls
                 if finish_reason and full_tool:
-                    generation["delta_tool_calls"] = _parse_tool_calls(
-                        full_tool, tool_format, request_id
-                    )
-                    generation["finish_reason"] = "tool_calls"
+                    if stream_tool_parser is not None:
+                        if stream_tool_parser.has_tool_calls:
+                            generation["finish_reason"] = "tool_calls"
+                        else:
+                            # Preserve a fallback for a complete but unusual
+                            # Qwen block that the incremental parser did not
+                            # recognize.
+                            fallback_tool_calls = _parse_tool_calls(
+                                full_tool, tool_format, request_id
+                            )
+                            if fallback_tool_calls:
+                                generation["delta_tool_calls"] = fallback_tool_calls
+                                generation["finish_reason"] = "tool_calls"
+                    else:
+                        generation["delta_tool_calls"] = _parse_tool_calls(
+                            full_tool, tool_format, request_id
+                        )
+                        generation["finish_reason"] = "tool_calls"
                 await gen_queue.put(generation)
 
             # End
